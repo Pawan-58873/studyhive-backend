@@ -1,0 +1,220 @@
+// server/index.ts
+
+import dotenv from 'dotenv';
+
+// Load environment variables FIRST, before any other imports
+dotenv.config();
+
+// Verify environment variables are loaded
+console.log("✅ Environment variables loaded!");
+console.log("LIVEBLOCKS_SECRET_KEY:", process.env.LIVEBLOCKS_SECRET_KEY ? `${process.env.LIVEBLOCKS_SECRET_KEY.substring(0, 8)}...` : 'undefined');
+
+import express from 'express';
+import cors from 'cors';
+import http from 'http';
+import { Server } from 'socket.io';
+
+import { checkAuth } from './src/middlewares/auth.middleware.ts';
+import groupRoutes from './src/api/group.routes.ts';
+import userRoutes from './src/api/user.routes.ts';
+import chatRoutes from './src/api/chat.routes.ts';
+import conversationRoutes from './src/api/conversation.routes.ts';
+import aiRoutes from './src/api/ai.routes.ts'; // 1. Import the new AI routes
+import sessionRoutes from './src/api/session.routes.ts';
+import liveblocksRoutes from './src/api/liveblocks.routes.ts';
+import executeRoutes from './src/api/execute.routes.ts';
+import adminRoutes from './src/api/admin.routes.ts';
+import { db } from './src/config/firebase.ts';
+
+console.log("Server starting... Is HF_API_KEY loaded?", process.env.HF_API_KEY);
+
+const app = express();
+const port = process.env.PORT || 5000;
+const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+
+app.use(cors({
+  origin: clientOrigin,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"], // Saare methods allow karein
+  credentials: true, // Authentication headers ke liye zaroori
+  allowedHeaders: ["Content-Type", "Authorization"] // File upload ke liye headers
+}));
+
+app.use(express.json({ limit: '50mb' })); // Increase payload limit
+app.use(express.urlencoded({ extended: true, limit: '50mb' })); // For form data
+
+// Health check endpoint (no auth required)
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Debug endpoint to test Firestore connection (no auth required)
+app.get('/api/debug/firestore', async (req, res) => {
+  try {
+    console.log('🔍 Testing Firestore connection...');
+    const startTime = Date.now();
+    
+    // Test 1: List collections
+    const collections = await db.listCollections();
+    const collectionNames = collections.map(c => c.id);
+    console.log('📁 Collections found:', collectionNames);
+    
+    // Test 2: Count users
+    const usersSnapshot = await db.collection('users').limit(10).get();
+    console.log('👥 Users found:', usersSnapshot.size);
+    
+    const users = usersSnapshot.docs.map(doc => ({
+      id: doc.id,
+      email: doc.data().email,
+      role: doc.data().role,
+      username: doc.data().username
+    }));
+    
+    // Test 3: Count groups WITH members
+    const groupsSnapshot = await db.collection('groups').limit(10).get();
+    console.log('📂 Groups found:', groupsSnapshot.size);
+    
+    const groups = await Promise.all(groupsSnapshot.docs.map(async (doc) => {
+      const membersSnap = await db.collection('groups').doc(doc.id).collection('members').get();
+      return {
+        id: doc.id,
+        name: doc.data().name,
+        privacy: doc.data().privacy,
+        memberCount: membersSnap.size,
+        members: membersSnap.docs.map(m => ({ id: m.id, ...m.data() }))
+      };
+    }));
+    
+    const totalMembers = groups.reduce((sum, g) => sum + g.memberCount, 0);
+    
+    const endTime = Date.now();
+    
+    res.json({
+      status: 'OK',
+      duration: `${endTime - startTime}ms`,
+      collections: collectionNames,
+      usersCount: usersSnapshot.size,
+      users: users,
+      groupsCount: groupsSnapshot.size,
+      groups: groups,
+      totalMembers
+    });
+  } catch (error: any) {
+    console.error('❌ Firestore test failed:', error);
+    res.status(500).json({ 
+      status: 'ERROR', 
+      error: error.message,
+      code: error.code 
+    });
+  }
+});
+
+// Create admin user endpoint (one-time setup)
+app.get('/api/setup/create-admin/:uid/:email', async (req, res) => {
+  try {
+    const { uid, email } = req.params;
+    console.log('🔧 Creating admin user:', uid, email);
+    
+    // Check if user already exists
+    const userDoc = await db.collection('users').doc(uid).get();
+    
+    if (userDoc.exists) {
+      // Update to admin
+      await db.collection('users').doc(uid).update({ role: 'admin' });
+      console.log('✅ Updated existing user to admin');
+      res.json({ status: 'OK', message: 'User updated to admin', existed: true });
+    } else {
+      // Create new admin user
+      await db.collection('users').doc(uid).set({
+        email: email,
+        username: email.split('@')[0],
+        role: 'admin',
+        status: 'active',
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      
+      // Also create username mapping
+      await db.collection('usernames').doc(email.split('@')[0].toLowerCase()).set({
+        uid: uid
+      });
+      
+      console.log('✅ Created new admin user');
+      res.json({ status: 'OK', message: 'Admin user created', existed: false });
+    }
+  } catch (error: any) {
+    console.error('❌ Failed to create admin:', error);
+    res.status(500).json({ status: 'ERROR', error: error.message });
+  }
+});
+
+// Code execution routes (no auth required for testing)
+app.use('/api', executeRoutes);
+
+app.use('/api', checkAuth);
+app.use('/api/groups', groupRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/chats', chatRoutes);
+app.use('/api/conversations', conversationRoutes);
+app.use('/api/ai', aiRoutes); // 2. Use the new AI routes
+app.use('/api/sessions', sessionRoutes);
+app.use('/api/liveblocks', liveblocksRoutes); // Liveblocks routes enabled
+app.use('/api/admin', adminRoutes); // Admin routes for dashboard management
+
+const server = http.createServer(app);
+
+export const io = new Server(server, {
+  cors: {
+    origin: clientOrigin,
+    methods: ['GET', 'POST'],
+  },
+});
+
+// Yeh map online users ko track karne ke liye hai
+const onlineUsers = new Map<string, { socketId: string; name: string; profileImageUrl?: string }>();
+
+io.on('connection', (socket) => {
+  console.log('🔌 A user connected:', socket.id);
+
+  // Jab client connect ho kar apni details bhejta hai
+  socket.on('register', (user: { uid: string; name: string; profileImageUrl?: string }) => {
+    if (user && user.uid) {
+        onlineUsers.set(user.uid, {
+            socketId: socket.id,
+            name: user.name,
+            profileImageUrl: user.profileImageUrl
+        });
+        console.log(`✅ User registered: ${user.name} is on socket ${socket.id}`);
+    }
+  });
+
+  // Jab user kisi group chat ko kholta hai
+  socket.on('joinGroup', (groupId: string) => {
+    socket.join(groupId);
+    console.log(`User ${socket.id} joined group room: ${groupId}`);
+  });
+
+  // Jab client message bhej kar kehta hai ke isse broadcast karo
+  socket.on('sendMessage', (data: { groupId: string; message: any }) => {
+    // Sirf ussi group ke room mein naya message bhejo
+    io.to(data.groupId).emit('newMessage', { message: data.message });
+    console.log(`Broadcasting message to group: ${data.groupId}`);
+  });
+
+  // Jab user disconnect hota hai
+  socket.on('disconnect', () => {
+    console.log(`🔥 A user disconnected: ${socket.id}`);
+    // onlineUsers map se user ko remove karne ka logic
+    for (const [userId, userData] of onlineUsers.entries()) {
+      if (userData.socketId === socket.id) {
+        onlineUsers.delete(userId);
+        console.log(`Unregistered user: ${userData.name}`);
+        break;
+      }
+    }
+  });
+});
+
+
+server.listen(port, () => {
+  console.log(`🚀 Server is now listening at http://localhost:${port}`);
+});
