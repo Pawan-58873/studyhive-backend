@@ -2,7 +2,7 @@
 
 import { Request, Response } from 'express';
 import { db } from '../config/firebase';
-import { InsertStudySession, insertStudySessionSchema } from '../../../shared/schema';
+import { InsertStudySession, insertStudySessionSchema } from '../shared/schema';
 import { Timestamp } from 'firebase-admin/firestore';
 
 /**

@@ -1,9 +1,9 @@
     // server/src/controllers/group.controller.ts
     import { z } from 'zod';
-    import { io } from '../../index.js';
+    import { io } from '../../index';
     import { Request, Response } from 'express';
     import { db, admin } from '../config/firebase';
-    import { insertGroupSchema, insertMessageSchema, User } from '../../../shared/schema';
+    import { insertGroupSchema, insertMessageSchema, User } from '../shared/schema';
     import { nanoid } from 'nanoid';
     import { FieldValue } from 'firebase-admin/firestore';
 

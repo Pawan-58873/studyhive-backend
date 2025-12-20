@@ -2,7 +2,7 @@
 
 import { Request, Response } from 'express';
 import { db } from '../config/firebase';
-import { User } from '../../../shared/schema';
+import { User } from '../shared/schema';
 import { FieldValue } from 'firebase-admin/firestore';
 
 // Helper function to create a unique chat ID
