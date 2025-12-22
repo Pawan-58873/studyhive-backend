@@ -8,13 +8,23 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load environment variables from root directory .env file
-// Path: root/.env (parent directory of server/)
-dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+// Load environment variables
+// For Render/Production: Environment variables are set directly in the platform
+// For local development: Load from .env file in server directory or parent directory
+dotenv.config({ path: path.resolve(__dirname, '.env') }); // Try server/.env first
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') }); // Fallback to parent .env
 
-// Verify environment variables are loaded
+// Log environment status (without exposing secrets)
 console.log("✅ Environment variables loaded!");
-console.log("LIVEBLOCKS_SECRET_KEY:", process.env.LIVEBLOCKS_SECRET_KEY ? `${process.env.LIVEBLOCKS_SECRET_KEY.substring(0, 8)}...` : 'undefined');
+console.log("📋 Environment Check:");
+console.log("   - PORT:", process.env.PORT || '8000 (default)');
+console.log("   - CLIENT_ORIGIN:", process.env.CLIENT_ORIGIN || 'http://localhost:5173 (default)');
+console.log("   - FIREBASE_PROJECT_ID:", process.env.FIREBASE_PROJECT_ID ? '✓ Set' : '✗ Missing');
+console.log("   - FIREBASE_CLIENT_EMAIL:", process.env.FIREBASE_CLIENT_EMAIL ? '✓ Set' : '✗ Missing');
+console.log("   - FIREBASE_PRIVATE_KEY:", process.env.FIREBASE_PRIVATE_KEY ? '✓ Set' : '✗ Missing');
+console.log("   - FIREBASE_STORAGE_BUCKET:", process.env.FIREBASE_STORAGE_BUCKET || 'Using default');
+console.log("   - LIVEBLOCKS_SECRET_KEY:", process.env.LIVEBLOCKS_SECRET_KEY ? '✓ Set' : '✗ Missing');
+console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? '✓ Set' : '✗ Missing (AI features disabled)');
 
 import express from 'express';
 import cors from 'cors';

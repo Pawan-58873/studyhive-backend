@@ -20,7 +20,7 @@ export const checkAuth = async (req: Request, res: Response, next: NextFunction)
     console.error('❌ Firebase Auth is not properly initialized!');
     console.error('❌ isFirebaseInitialized:', isFirebaseInitialized);
     return res.status(500).send({ 
-      error: 'Server configuration error: Authentication service not available. Please check server/serviceAccountKey.json' 
+      error: 'Server configuration error: Authentication service not available. Please check Firebase environment variables.' 
     });
   }
   

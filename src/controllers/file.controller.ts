@@ -6,8 +6,16 @@ import { db, admin } from '../config/firebase';
 import { FieldValue } from 'firebase-admin/firestore';
 import { nanoid } from 'nanoid';
 
-// Get Firebase Storage bucket
-const bucket = admin.storage().bucket();
+// Get Firebase Storage bucket from environment variable or default
+const getStorageBucket = () => {
+  const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+  if (bucketName) {
+    return admin.storage().bucket(bucketName);
+  }
+  return admin.storage().bucket();
+};
+
+const bucket = getStorageBucket();
 
 // Maximum file size (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
