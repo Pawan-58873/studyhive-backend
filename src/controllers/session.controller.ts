@@ -86,8 +86,47 @@ export const getGroupSessions = async (req: Request, res: Response) => {
 
     res.status(200).json(sessions);
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error fetching sessions:", error);
+    
+    // Handle Firestore index missing or building error with a helpful message
+    if (error.code === 9 || error.message?.includes('requires an index')) {
+      // Check if the index is currently building
+      const isIndexBuilding = error.details?.includes('currently building') || 
+                              error.message?.includes('currently building');
+      
+      // Extract the index status URL if available
+      const indexUrl = error.details?.match(/https:\/\/console\.firebase\.google\.com[^\s]+/)?.[0];
+      
+      if (isIndexBuilding) {
+        console.log("⏳ Firestore index is currently building. Please wait...");
+        return res.status(503).json({ 
+          message: "Database is being optimized. Please try again in 2-5 minutes.",
+          error: "INDEX_BUILDING",
+          details: indexUrl 
+            ? `Check index status here: ${indexUrl}`
+            : "The database index is being created. This typically takes 2-5 minutes."
+        });
+      }
+      
+      console.error("⚠️ Firestore composite index required. Please create the index using Firebase Console.");
+      return res.status(503).json({ 
+        message: "Database index is being created. Please try again in a few minutes.",
+        error: "INDEX_REQUIRED",
+        details: indexUrl 
+          ? `You can create the required index here: ${indexUrl}`
+          : "A composite index for sessions (groupId + startTime) is required. Deploy indexes using: firebase deploy --only firestore:indexes"
+      });
+    }
+    
+    // Handle other Firestore errors
+    if (error.code) {
+      return res.status(500).json({ 
+        message: "Database error occurred.", 
+        error: error.code 
+      });
+    }
+    
     res.status(500).json({ message: "Something went wrong on the server." });
   }
 };

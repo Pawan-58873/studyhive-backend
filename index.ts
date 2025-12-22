@@ -1,9 +1,16 @@
 // server/index.ts
 
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-// Load environment variables FIRST, before any other imports
-dotenv.config();
+// Get the directory name for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load environment variables from root directory .env file
+// Path: root/.env (parent directory of server/)
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
 // Verify environment variables are loaded
 console.log("✅ Environment variables loaded!");
@@ -19,17 +26,16 @@ import groupRoutes from './src/api/group.routes.ts';
 import userRoutes from './src/api/user.routes.ts';
 import chatRoutes from './src/api/chat.routes.ts';
 import conversationRoutes from './src/api/conversation.routes.ts';
-import aiRoutes from './src/api/ai.routes.ts'; // 1. Import the new AI routes
 import sessionRoutes from './src/api/session.routes.ts';
 import liveblocksRoutes from './src/api/liveblocks.routes.ts';
 import executeRoutes from './src/api/execute.routes.ts';
 import adminRoutes from './src/api/admin.routes.ts';
+import fileRoutes from './src/api/file.routes.ts';
+import aiRoutes from './src/api/ai.routes.ts';
 import { db } from './src/config/firebase.ts';
 
-console.log("Server starting... Is HF_API_KEY loaded?", process.env.HF_API_KEY);
-
 const app = express();
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 8000;
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 
 app.use(cors({
@@ -152,13 +158,14 @@ app.use('/api', executeRoutes);
 
 app.use('/api', checkAuth);
 app.use('/api/groups', groupRoutes);
+app.use('/api/groups', fileRoutes); // File routes mounted under /api/groups for /api/groups/:groupId/files
 app.use('/api/users', userRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/conversations', conversationRoutes);
-app.use('/api/ai', aiRoutes); // 2. Use the new AI routes
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/liveblocks', liveblocksRoutes); // Liveblocks routes enabled
 app.use('/api/admin', adminRoutes); // Admin routes for dashboard management
+app.use('/api/ai', aiRoutes); // AI routes for summarization and study tools
 
 const server = http.createServer(app);
 

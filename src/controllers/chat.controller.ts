@@ -20,7 +20,7 @@ export const createOrGetChat = async (req: Request, res: Response) => {
     }
 
     const chatId = getChatId(currentUserId, friendId);
-    const chatDocRef = db.collection('userChats').doc(chatId);
+    const chatDocRef = db.collection('chats').doc(chatId);
     const chatDoc = await chatDocRef.get();
 
     if (chatDoc.exists) {
@@ -46,7 +46,7 @@ export const createOrGetChat = async (req: Request, res: Response) => {
 export const getChatMessages = async (req: Request, res: Response) => {
     try {
         const { chatId } = req.params;
-        const messagesSnapshot = await db.collection('userChats').doc(chatId).collection('messages').orderBy('createdAt', 'asc').get();
+        const messagesSnapshot = await db.collection('chats').doc(chatId).collection('messages').orderBy('createdAt', 'asc').get();
         
         const messages = messagesSnapshot.docs.map(doc => {
             const data = doc.data();
@@ -102,12 +102,12 @@ export const sendChatMessage = async (req: Request, res: Response) => {
             createdAt: FieldValue.serverTimestamp(),
         };
 
-        const messageRef = db.collection('userChats').doc(chatId).collection('messages').doc();
+        const messageRef = db.collection('chats').doc(chatId).collection('messages').doc();
         const batch = db.batch();
 
         batch.set(messageRef, messageData);
 
-        const chatDoc = await db.collection('userChats').doc(chatId).get();
+        const chatDoc = await db.collection('chats').doc(chatId).get();
         const participantIds = chatDoc.data()?.participantIds;
         if (participantIds && participantIds.length === 2) {
             const receiverId = participantIds.find((id: string) => id !== senderId)!;
@@ -164,8 +164,8 @@ export const logCallEvent = async (req: Request, res: Response) => {
             callInfo: { type, duration } // Data about the call
         };
 
-        // Add the new message to the userChats messages subcollection
-        await db.collection('userChats').doc(chatId).collection('messages').add(messageData);
+        // Add the new message to the chats messages subcollection
+        await db.collection('chats').doc(chatId).collection('messages').add(messageData);
 
         res.status(201).send({ message: "Call event logged." });
     } catch (error) {

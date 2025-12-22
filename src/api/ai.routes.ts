@@ -1,25 +1,35 @@
-import express from 'express';
+// server/src/api/ai.routes.ts
+// AI Routes - Handles AI-powered features like summarization
+
+import { Router } from 'express';
 import multer from 'multer';
-import { summarizeContent, generateKeyPointsFromContent } from '../controllers/ai.controller';
 import { checkAuth } from '../middlewares/auth.middleware';
-import upload from "../middlewares/upload";
+import {
+  summarizeContent,
+  generateStudyNotes,
+  askQuestion,
+} from '../controllers/ai.controller';
 
-const router = express.Router();
+const router = Router();
 
-// Summarization route - Generate summary using fast extractive algorithm
-router.post(
-  "/summarize",
-  checkAuth,
-  upload.single('document'), // Multer middleware for file upload
-  summarizeContent
-);
+// Configure multer for memory storage (files stored in buffer)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+});
 
-// Key Points route - Extract key points using fast extractive algorithm
-router.post(
-  "/keypoints",
-  checkAuth,
-  upload.single('document'), // Multer middleware for file upload
-  generateKeyPointsFromContent
-);
+// Apply authentication middleware
+router.use(checkAuth);
+
+// POST /api/ai/summarize - Summarize text or uploaded document
+router.post('/summarize', upload.single('document'), summarizeContent);
+
+// POST /api/ai/generate-notes - Generate study notes from content
+router.post('/generate-notes', upload.single('document'), generateStudyNotes);
+
+// POST /api/ai/ask - Ask a question about provided content
+router.post('/ask', askQuestion);
 
 export default router;
