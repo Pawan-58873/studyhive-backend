@@ -28,6 +28,7 @@ console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? '✓ Set' : '�
 
 import express from 'express';
 import cors from 'cors';
+import session from 'express-session';
 import http from 'http';
 import { Server } from 'socket.io';
 
@@ -48,12 +49,38 @@ const app = express();
 const port = process.env.PORT || 8000;
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 
-app.use(cors({
+// Trust proxy for Render deployment (required for secure cookies behind proxy)
+app.set('trust proxy', 1);
+
+// CORS configuration - must be BEFORE all routes
+const corsOptions = {
   origin: clientOrigin,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"], // Saare methods allow karein
-  credentials: true, // Authentication headers ke liye zaroori
-  allowedHeaders: ["Content-Type", "Authorization"] // File upload ke liye headers
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+// Handle preflight requests explicitly
+app.options('*', cors(corsOptions));
+
+// Apply CORS middleware
+app.use(cors(corsOptions));
+
+// Session configuration for cross-origin requests (Vercel <-> Render)
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'studyhive-session-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production', // true in production (HTTPS)
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for cross-origin in production
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  },
 }));
+
+console.log('🔒 CORS configured for origin:', clientOrigin);
+console.log('🍪 Session configured with sameSite:', process.env.NODE_ENV === 'production' ? 'none' : 'lax');
 
 app.use(express.json({ limit: '50mb' })); // Increase payload limit
 app.use(express.urlencoded({ extended: true, limit: '50mb' })); // For form data
@@ -183,6 +210,7 @@ export const io = new Server(server, {
   cors: {
     origin: clientOrigin,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
