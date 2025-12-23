@@ -91,7 +91,6 @@ app.use(session({
   },
 }));
 
-console.log('🔒 CORS configured for origin:', clientOrigin);
 console.log('🍪 Session configured with sameSite:', process.env.NODE_ENV === 'production' ? 'none' : 'lax');
 
 app.use(express.json({ limit: '50mb' })); // Increase payload limit
