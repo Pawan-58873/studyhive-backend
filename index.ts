@@ -47,6 +47,8 @@ import { db } from './src/config/firebase.ts';
 
 const app = express();
 const port = process.env.PORT || 8000;
+const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+
 // Allowed origins for CORS (localhost for dev, Vercel for production)
 const allowedOrigins = [
   'http://localhost:5173',
@@ -54,9 +56,8 @@ const allowedOrigins = [
 ];
 
 // Add custom CLIENT_ORIGIN from env if set and not already in list
-const envOrigin = process.env.CLIENT_ORIGIN;
-if (envOrigin && !allowedOrigins.includes(envOrigin)) {
-  allowedOrigins.push(envOrigin);
+if (clientOrigin && !allowedOrigins.includes(clientOrigin)) {
+  allowedOrigins.push(clientOrigin);
 }
 
 // Trust proxy for Render deployment (required for secure cookies behind proxy)
@@ -70,6 +71,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
+console.log('🔒 CORS configured for origin:', clientOrigin);
 console.log('🔒 CORS allowed origins:', allowedOrigins);
 
 // Handle preflight requests explicitly
@@ -95,6 +97,20 @@ console.log('🍪 Session configured with sameSite:', process.env.NODE_ENV === '
 
 app.use(express.json({ limit: '50mb' })); // Increase payload limit
 app.use(express.urlencoded({ extended: true, limit: '50mb' })); // For form data
+
+// Root route - shows server status
+app.get('/', (req, res) => {
+  res.json({
+    message: '✅ StudyHive Backend is running!',
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      docs: 'API documentation coming soon'
+    }
+  });
+});
 
 // Health check endpoint (no auth required)
 app.get('/api/health', (req, res) => {
