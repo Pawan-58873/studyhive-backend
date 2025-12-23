@@ -47,18 +47,30 @@ import { db } from './src/config/firebase.ts';
 
 const app = express();
 const port = process.env.PORT || 8000;
-const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+// Allowed origins for CORS (localhost for dev, Vercel for production)
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://studyhive-frontend-hgah.vercel.app'
+];
+
+// Add custom CLIENT_ORIGIN from env if set and not already in list
+const envOrigin = process.env.CLIENT_ORIGIN;
+if (envOrigin && !allowedOrigins.includes(envOrigin)) {
+  allowedOrigins.push(envOrigin);
+}
 
 // Trust proxy for Render deployment (required for secure cookies behind proxy)
 app.set('trust proxy', 1);
 
 // CORS configuration - must be BEFORE all routes
 const corsOptions = {
-  origin: clientOrigin,
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
+
+console.log('🔒 CORS allowed origins:', allowedOrigins);
 
 // Handle preflight requests explicitly
 app.options('*', cors(corsOptions));
@@ -208,7 +220,7 @@ const server = http.createServer(app);
 
 export const io = new Server(server, {
   cors: {
-    origin: clientOrigin,
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true,
   },
