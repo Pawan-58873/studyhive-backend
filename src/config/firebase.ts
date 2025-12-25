@@ -8,13 +8,50 @@ const __dirname = path.dirname(__filename);
 
 let firebaseInitialized = false;
 
+/**
+ * Normalizes the Firebase private key from environment variable.
+ * 
+ * PROBLEM: When FIREBASE_PRIVATE_KEY is set in platforms like Render, Vercel, or Heroku,
+ * the newlines can be encoded in different ways:
+ *   - Literal \n characters (two chars: backslash + n)
+ *   - Double-escaped \\n (four chars)
+ *   - Actual newlines (rare, depends on how it was pasted)
+ * 
+ * This function handles all cases to ensure verifyIdToken() works correctly.
+ * 
+ * @param key - The raw private key from environment variable
+ * @returns The normalized private key with actual newline characters
+ */
+const normalizePrivateKey = (key: string | undefined): string | undefined => {
+  if (!key) return undefined;
+  
+  // Step 1: Replace double-escaped newlines (\\\\n → \n)
+  // This handles cases where the key was double-escaped during copy/paste
+  let normalized = key.replace(/\\\\n/g, '\n');
+  
+  // Step 2: Replace single-escaped newlines (\\n → \n)
+  // This is the most common case from environment variables
+  normalized = normalized.replace(/\\n/g, '\n');
+  
+  // Step 3: Verify the key has proper structure
+  if (!normalized.includes('-----BEGIN PRIVATE KEY-----')) {
+    console.warn('⚠️  Warning: Private key may be malformed - missing BEGIN marker');
+  }
+  if (!normalized.includes('-----END PRIVATE KEY-----')) {
+    console.warn('⚠️  Warning: Private key may be malformed - missing END marker');
+  }
+  
+  return normalized;
+};
+
 // Initialize Firebase Admin SDK
 // Priority: 1. Environment variables (for production), 2. serviceAccountKey.json (for local development)
 try {
   // Check for environment variables first
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  // ✅ FIX: Use normalizePrivateKey to handle all escape patterns
+  const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
   const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
 
   // Helper function to get default storage bucket name
@@ -27,8 +64,16 @@ try {
 
   if (!admin.apps.length) {
     if (projectId && clientEmail && privateKey) {
-      // Use environment variables
+      // ✅ Use environment variables (Production - Render/Vercel/Heroku)
       const bucketName = storageBucket || getDefaultStorageBucket(projectId);
+      
+      // Debug: Log private key info (without exposing the actual key)
+      console.log('🔑 Private Key Debug:');
+      console.log('   - Length:', privateKey.length, 'characters');
+      console.log('   - Starts with:', privateKey.substring(0, 30) + '...');
+      console.log('   - Has BEGIN marker:', privateKey.includes('-----BEGIN PRIVATE KEY-----'));
+      console.log('   - Has END marker:', privateKey.includes('-----END PRIVATE KEY-----'));
+      console.log('   - Has real newlines:', privateKey.includes('\n'));
       
       admin.initializeApp({
         credential: admin.credential.cert({
@@ -38,10 +83,13 @@ try {
         }),
         storageBucket: bucketName,
       });
-      console.log('✅ Firebase initialized with environment variables');
+      
+      console.log('');
+      console.log('✅ Firebase Admin initialized with environment variables');
       console.log('📋 Firebase Project ID:', projectId);
+      console.log('📧 Firebase Client Email:', clientEmail);
       console.log('📦 Storage Bucket:', bucketName);
-      console.log('📦 Storage Bucket URL: gs://' + bucketName);
+      console.log('🔐 Token verification should now work on Render!');
       
       // Verify bucket is accessible
       try {
@@ -52,6 +100,11 @@ try {
         console.warn('   This might be normal if the bucket needs to be created in Firebase Console');
       }
     } else {
+      // Log which env vars are missing
+      console.log('🔍 Environment variable check:');
+      console.log('   - FIREBASE_PROJECT_ID:', projectId ? '✓ Set' : '✗ Missing');
+      console.log('   - FIREBASE_CLIENT_EMAIL:', clientEmail ? '✓ Set' : '✗ Missing');
+      console.log('   - FIREBASE_PRIVATE_KEY:', process.env.FIREBASE_PRIVATE_KEY ? '✓ Set' : '✗ Missing');
       // Fallback to serviceAccountKey.json for local development
       const require = createRequire(import.meta.url);
       const serviceAccountPath = path.resolve(__dirname, '../../serviceAccountKey.json');
