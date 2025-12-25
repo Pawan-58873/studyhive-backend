@@ -1,14 +1,14 @@
-// server/src/api/file.routes.ts
-// File Management Routes
+// server/src/api/direct-file.routes.ts
+// Direct File Sharing Routes (Friend-to-Friend)
 
 import { Router } from 'express';
 import multer from 'multer';
 import { checkAuth } from '../middlewares/auth.middleware';
 import {
-  getGroupFiles,
-  uploadGroupFile,
-  deleteGroupFile,
-  getFileDownloadUrl,
+  getDirectFiles,
+  uploadDirectFile,
+  deleteDirectFile,
+  getDirectFileDownloadUrl,
 } from '../controllers/file.controller';
 
 const router = Router();
@@ -24,14 +24,14 @@ const upload = multer({
 // Apply authentication middleware
 router.use(checkAuth);
 
-// GET /api/groups/:groupId/files - Get all files for a group
-router.get('/:groupId/files', getGroupFiles);
+// GET /api/users/:friendId/files - Get all files shared with a friend
+router.get('/:friendId/files', getDirectFiles);
 
-// POST /api/groups/:groupId/files - Upload a file to a group
-router.post('/:groupId/files', (req, res, next) => {
+// POST /api/users/:friendId/files - Upload a file to share with a friend
+router.post('/:friendId/files', (req, res, next) => {
   upload.single('file')(req, res, (err: any) => {
     if (err) {
-      console.error('[File Upload Route] Multer error:', err);
+      console.error('[Direct File Upload Route] Multer error:', err);
       
       // Handle specific multer errors
       if (err instanceof multer.MulterError) {
@@ -50,22 +50,21 @@ router.post('/:groupId/files', (req, res, next) => {
         });
       }
       
-      // Handle other errors
       return res.status(500).json({ 
         error: 'File upload failed.',
         details: err.message 
       });
     }
     
-    // No error, continue to controller
     next();
   });
-}, uploadGroupFile);
+}, uploadDirectFile);
 
-// DELETE /api/groups/:groupId/files/:fileId - Delete a file
-router.delete('/:groupId/files/:fileId', deleteGroupFile);
+// DELETE /api/users/:friendId/files/:fileId - Delete a shared file
+router.delete('/:friendId/files/:fileId', deleteDirectFile);
 
-// GET /api/groups/:groupId/files/:fileId/download - Get download URL
-router.get('/:groupId/files/:fileId/download', getFileDownloadUrl);
+// GET /api/users/:friendId/files/:fileId/download - Get download URL for a shared file
+router.get('/:friendId/files/:fileId/download', getDirectFileDownloadUrl);
 
 export default router;
+

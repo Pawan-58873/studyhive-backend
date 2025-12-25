@@ -11,7 +11,19 @@ declare global {
 
 export const checkAuth = async (req: Request, res: Response, next: NextFunction) => {
   const token = req.headers.authorization?.split('Bearer ')[1];
+  const isFileUpload = req.path.includes('/files') && req.method === 'POST';
+  
+  if (isFileUpload) {
+    console.log('[Auth Middleware] ===== File Upload Request =====');
+    console.log('[Auth Middleware] Path:', req.path);
+    console.log('[Auth Middleware] Method:', req.method);
+    console.log('[Auth Middleware] Token present:', !!token);
+  }
+  
   if (!token) {
+    if (isFileUpload) {
+      console.error('[Auth Middleware] ❌ No token provided for file upload');
+    }
     return res.status(401).send({ error: 'Unauthorized: No token provided.' });
   }
   
@@ -27,22 +39,38 @@ export const checkAuth = async (req: Request, res: Response, next: NextFunction)
   try {
     const decodedToken = await auth.verifyIdToken(token, true); // Check revoked tokens
     
+    if (isFileUpload) {
+      console.log('[Auth Middleware] ✅ Token verified successfully');
+      console.log('[Auth Middleware] User UID:', decodedToken.uid);
+      console.log('[Auth Middleware] User email:', decodedToken.email);
+    }
+    
     // Make email verification optional for development
     // Set REQUIRE_EMAIL_VERIFICATION=true in .env to enforce email verification
     const requireEmailVerification = process.env.REQUIRE_EMAIL_VERIFICATION === 'true';
     
     if (requireEmailVerification && !decodedToken.email_verified) {
+      if (isFileUpload) {
+        console.error('[Auth Middleware] ❌ Email not verified');
+      }
       return res.status(403).send({ error: 'Forbidden: Email not verified.' });
     }
 
     req.user = { uid: decodedToken.uid, email: decodedToken.email };
+    
+    if (isFileUpload) {
+      console.log('[Auth Middleware] ✅ Authentication successful, proceeding to controller');
+    }
+    
     next();
   } catch (error: any) {
-    console.error('Auth error details:', {
+    console.error('[Auth Middleware] ❌ Auth error details:', {
       code: error.code,
       message: error.message,
       tokenLength: token?.length,
-      tokenPreview: token?.substring(0, 20) + '...'
+      tokenPreview: token?.substring(0, 20) + '...',
+      path: req.path,
+      method: req.method
     });
     
     // Provide more specific error messages

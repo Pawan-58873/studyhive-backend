@@ -42,6 +42,7 @@ import liveblocksRoutes from './src/api/liveblocks.routes.ts';
 import executeRoutes from './src/api/execute.routes.ts';
 import adminRoutes from './src/api/admin.routes.ts';
 import fileRoutes from './src/api/file.routes.ts';
+import directFileRoutes from './src/api/direct-file.routes.ts';
 import aiRoutes from './src/api/ai.routes.ts';
 import { db } from './src/config/firebase.ts';
 
@@ -224,6 +225,7 @@ app.use('/api', checkAuth);
 app.use('/api/groups', groupRoutes);
 app.use('/api/groups', fileRoutes); // File routes mounted under /api/groups for /api/groups/:groupId/files
 app.use('/api/users', userRoutes);
+app.use('/api/users', directFileRoutes); // Direct file routes for /api/users/:friendId/files
 app.use('/api/chats', chatRoutes);
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/sessions', sessionRoutes);

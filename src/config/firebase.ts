@@ -17,33 +17,68 @@ try {
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
   const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
 
+  // Helper function to get default storage bucket name
+  // Firebase uses either .appspot.com (legacy) or .firebasestorage.app (new) format
+  const getDefaultStorageBucket = (projId: string): string => {
+    // Try new format first (for Spark plan and newer projects)
+    // If that doesn't work, fall back to legacy format
+    return `${projId}.firebasestorage.app`;
+  };
+
   if (!admin.apps.length) {
     if (projectId && clientEmail && privateKey) {
       // Use environment variables
+      const bucketName = storageBucket || getDefaultStorageBucket(projectId);
+      
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId,
           clientEmail,
           privateKey,
         }),
-        storageBucket: storageBucket || `${projectId}.appspot.com`,
+        storageBucket: bucketName,
       });
       console.log('✅ Firebase initialized with environment variables');
       console.log('📋 Firebase Project ID:', projectId);
-      console.log('📦 Storage Bucket:', storageBucket || `${projectId}.appspot.com`);
+      console.log('📦 Storage Bucket:', bucketName);
+      console.log('📦 Storage Bucket URL: gs://' + bucketName);
+      
+      // Verify bucket is accessible
+      try {
+        const bucket = admin.storage().bucket(bucketName);
+        console.log('✅ Storage bucket initialized successfully');
+      } catch (bucketError: any) {
+        console.warn('⚠️  Warning: Could not verify storage bucket:', bucketError.message);
+        console.warn('   This might be normal if the bucket needs to be created in Firebase Console');
+      }
     } else {
       // Fallback to serviceAccountKey.json for local development
       const require = createRequire(import.meta.url);
       const serviceAccountPath = path.resolve(__dirname, '../../serviceAccountKey.json');
       const serviceAccount = require(serviceAccountPath);
       
+      // Use bucket from service account if available, otherwise use default format
+      const bucketName = serviceAccount.storageBucket || 
+                        process.env.FIREBASE_STORAGE_BUCKET || 
+                        getDefaultStorageBucket(serviceAccount.project_id);
+      
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
-        storageBucket: serviceAccount.project_id + '.appspot.com',
+        storageBucket: bucketName,
       });
       console.log('✅ Firebase initialized with serviceAccountKey.json');
       console.log('📋 Firebase Project ID:', serviceAccount.project_id);
-      console.log('📦 Storage Bucket:', serviceAccount.project_id + '.appspot.com');
+      console.log('📦 Storage Bucket:', bucketName);
+      console.log('📦 Storage Bucket URL: gs://' + bucketName);
+      
+      // Verify bucket is accessible
+      try {
+        const bucket = admin.storage().bucket(bucketName);
+        console.log('✅ Storage bucket initialized successfully');
+      } catch (bucketError: any) {
+        console.warn('⚠️  Warning: Could not verify storage bucket:', bucketError.message);
+        console.warn('   This might be normal if the bucket needs to be created in Firebase Console');
+      }
     }
     firebaseInitialized = true;
   } else {
