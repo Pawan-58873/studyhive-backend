@@ -53,7 +53,8 @@ const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 // Allowed origins for CORS (localhost for dev, Vercel for production)
 const allowedOrigins = [
   'http://localhost:5173',
-  'https://studyhive-frontend-hgah.vercel.app'
+  'https://studyhive-frontend-ten.vercel.app', // ✅ Updated to correct Vercel URL
+  'https://studyhive-frontend-hgah.vercel.app' // Keep old one for backward compatibility
 ];
 
 // Add custom CLIENT_ORIGIN from env if set and not already in list
