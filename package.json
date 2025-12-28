@@ -21,6 +21,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@liveblocks/node": "^3.7.1",
+    "cloudinary": "^1.41.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^4.21.2",
@@ -28,6 +29,7 @@
     "firebase-admin": "^13.4.0",
     "mammoth": "^1.11.0",
     "multer": "^2.0.2",
+    "multer-storage-cloudinary": "^4.0.0",
     "nanoid": "^5.1.5",
     "node-fetch": "^2.7.0",
     "officeparser": "^5.2.0",

@@ -39,11 +39,11 @@ const getStorageBucket = () => {
     console.error('[File Controller] Firebase Admin not initialized');
     return null;
   }
-  
+
   try {
     // Get bucket name from environment or use default from Firebase app config
     const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
-    
+
     let bucket;
     if (bucketName) {
       bucket = admin.storage().bucket(bucketName);
@@ -53,13 +53,13 @@ const getStorageBucket = () => {
       bucket = admin.storage().bucket();
       console.log('[File Controller] Using default storage bucket from Firebase config');
     }
-    
+
     // Log bucket details for debugging
     const bucketNameActual = bucket.name;
     console.log('[File Controller] Storage bucket name:', bucketNameActual);
     console.log('[File Controller] Storage bucket URL: gs://' + bucketNameActual);
     console.log('[File Controller] Storage bucket public URL: https://storage.googleapis.com/' + bucketNameActual);
-    
+
     return bucket;
   } catch (error: any) {
     console.error('[File Controller] ❌ Error getting storage bucket:', error);
@@ -76,7 +76,7 @@ if (bucket) {
   console.log('[File Controller] ===== Verifying Storage Bucket =====');
   console.log('[File Controller] Bucket name:', bucket.name);
   console.log('[File Controller] Bucket URL: gs://' + bucket.name);
-  
+
   bucket.exists()
     .then(([exists]) => {
       if (exists) {
@@ -149,7 +149,7 @@ export const getGroupFiles = async (req: Request, res: Response) => {
     const files = await Promise.all(
       filesSnapshot.docs.map(async (doc) => {
         const fileData = doc.data();
-        
+
         // Get uploader info
         let uploader = {
           username: 'Unknown',
@@ -234,17 +234,17 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
     try {
       console.log(`[File Upload] Checking group membership for user ${userId} in group ${groupId}`);
       const memberDoc = await db.collection('groups').doc(groupId).collection('members').doc(userId).get();
-      
+
       if (!memberDoc.exists) {
         console.log(`[File Upload] ❌ User ${userId} is NOT a member of group ${groupId}`);
         console.log(`[File Upload] Returning 403 Forbidden`);
-        return res.status(403).json({ 
+        return res.status(403).json({
           error: 'You are not a member of this group.',
           userId,
           groupId
         });
       }
-      
+
       const memberData = memberDoc.data();
       console.log(`[File Upload] ✅ User ${userId} is a member of group ${groupId}`);
       console.log(`[File Upload] Member role: ${memberData?.role || 'member'}`);
@@ -252,230 +252,145 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
       console.error('[File Upload] ❌ Error checking group membership:', dbError);
       console.error('[File Upload] Error code:', dbError.code);
       console.error('[File Upload] Error message:', dbError.message);
-      return res.status(500).json({ 
+      return res.status(500).json({
         error: 'Failed to verify group membership.',
-        details: dbError.message 
+        details: dbError.message
       });
     }
 
-    // Check if file was uploaded (via multer)
-    if (!req.file) {
-      console.log('[File Upload] No file uploaded - returning 400');
-      console.log('[File Upload] Request files:', req.files);
-      console.log('[File Upload] Multer error:', (req as any).multerError);
-      return res.status(400).json({ 
-        error: 'No file uploaded. Please ensure you are sending a file with the field name "file".' 
+    // Check if file was uploaded (via multer) or fileUrl provided
+    if (!req.file && !req.body.fileUrl) {
+      console.log('[File Upload] No file uploaded and no URL provided - returning 400');
+      return res.status(400).json({
+        error: 'No file uploaded. Please ensure you are sending a file or a valid fileUrl.'
       });
     }
 
-    const file = req.file;
-    const { name, description } = req.body;
-
-    // Log file info
-    console.log('[File Upload] File info:', {
-      originalname: file.originalname,
-      mimetype: file.mimetype,
-      size: file.size,
-      bufferLength: file.buffer?.length || 0,
-      nameFromBody: name,
-      description: description,
-    });
-
-    // Validate file buffer exists
-    if (!file.buffer || file.buffer.length === 0) {
-      console.error('[File Upload] File buffer is empty');
-      return res.status(400).json({ error: 'File buffer is empty. Please try uploading again.' });
-    }
-
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-      console.log(`[File Upload] File size ${file.size} exceeds limit ${MAX_FILE_SIZE}`);
-      return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
-    }
-
-    // Validate file type
-    if (!ALLOWED_TYPES.includes(file.mimetype)) {
-      console.log(`[File Upload] File type ${file.mimetype} not allowed`);
-      return res.status(400).json({ 
-        error: 'File type not allowed. Allowed types: PDF, DOCX, PPTX, JPG, PNG, GIF, TXT, ZIP' 
-      });
-    }
-
-    // Generate unique file ID and path
+    const { name, description, fileUrl, fileType, fileSize, mimeType } = req.body;
+    let finalFileUrl = fileUrl;
+    let storagePath = '';
+    let finalFileSize = fileSize ? parseInt(fileSize) : 0;
+    let finalMimeType = mimeType || '';
+    let finalFileExtension = fileType || '';
     const fileId = nanoid(16);
-    const fileExtension = file.originalname.split('.').pop() || 'bin';
-    const storagePath = `groups/${groupId}/files/${fileId}.${fileExtension}`;
 
-    console.log(`[File Upload] ===== Starting Firebase Storage Upload =====`);
-    console.log(`[File Upload] Storage path: ${storagePath}`);
-    console.log(`[File Upload] Bucket name: ${bucket.name}`);
-    console.log(`[File Upload] Bucket URL: gs://${bucket.name}`);
-    console.log(`[File Upload] Full storage path: gs://${bucket.name}/${storagePath}`);
-    console.log(`[File Upload] Public URL will be: https://storage.googleapis.com/${bucket.name}/${storagePath}`);
+    // If file is provided via Multer (Firebase Storage)
+    if (req.file) {
+      const file = req.file;
 
-    // Upload file to Firebase Storage
-    try {
-      const fileRef = bucket.file(storagePath);
-      
-      console.log(`[File Upload] File reference created: ${fileRef.name}`);
-      console.log(`[File Upload] Uploading file buffer (${file.buffer.length} bytes)...`);
-      
-      await fileRef.save(file.buffer, {
-        metadata: {
-          contentType: file.mimetype,
+      // Log file info
+      console.log('[File Upload] File info:', {
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+      });
+
+      // Validate file buffer exists
+      if (!file.buffer || file.buffer.length === 0) {
+        return res.status(400).json({ error: 'File buffer is empty.' });
+      }
+
+      // Validate file size
+      if (file.size > MAX_FILE_SIZE) {
+        return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
+      }
+
+      // Validate file type
+      if (!ALLOWED_TYPES.includes(file.mimetype)) {
+        return res.status(400).json({
+          error: 'File type not allowed.'
+        });
+      }
+
+      finalFileSize = file.size;
+      finalMimeType = file.mimetype;
+      finalFileExtension = file.originalname.split('.').pop() || 'bin';
+      storagePath = `groups/${groupId}/files/${fileId}.${finalFileExtension}`;
+
+      // Upload to Firebase Storage
+      try {
+        const fileRef = bucket.file(storagePath);
+        await fileRef.save(file.buffer, {
           metadata: {
-            uploaderId: userId,
-            groupId: groupId,
-            originalName: file.originalname,
+            contentType: file.mimetype,
+            metadata: {
+              uploaderId: userId,
+              groupId: groupId,
+              originalName: file.originalname,
+            },
           },
-        },
-      });
+        });
 
-      console.log('[File Upload] ✅ File saved to Firebase Storage successfully');
-      console.log(`[File Upload] File location: gs://${bucket.name}/${storagePath}`);
-
-      // Make the file publicly accessible (or use signed URLs)
-      // Note: For Spark (free) plan, makePublic might require proper IAM permissions
-      let fileUrl: string;
-      let isPublic = false;
-      
-      try {
-        await fileRef.makePublic();
-        console.log('[File Upload] ✅ File made publicly accessible');
-        isPublic = true;
-        // Use public URL if makePublic succeeded
-        fileUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-        console.log(`[File Upload] Public URL: ${fileUrl}`);
-      } catch (makePublicError: any) {
-        console.warn('[File Upload] ⚠️  Could not make file public:', makePublicError.message);
-        console.warn('[File Upload] Error code:', makePublicError.code);
-        console.warn('[File Upload] This might be due to IAM permissions or Spark plan limitations');
-        console.warn('[File Upload] Generating signed URL instead...');
-        
-        // Fallback to signed URL if makePublic fails
         try {
-          const [signedUrl] = await fileRef.getSignedUrl({
-            action: 'read',
-            expires: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year
-          });
-          fileUrl = signedUrl;
-          console.log(`[File Upload] ✅ Signed URL generated (expires in 1 year)`);
-          console.log(`[File Upload] Signed URL: ${fileUrl.substring(0, 100)}...`);
-        } catch (signedUrlError: any) {
-          console.error('[File Upload] ❌ Failed to generate signed URL:', signedUrlError.message);
-          throw new Error('Failed to generate file URL. Please check Storage permissions.');
+          await fileRef.makePublic();
+          finalFileUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+        } catch (e) {
+          const [signedUrl] = await fileRef.getSignedUrl({ action: 'read', expires: Date.now() + 31536000000 });
+          finalFileUrl = signedUrl;
         }
+      } catch (storageError: any) {
+        console.error('[File Upload] Firebase Storage Error:', storageError);
+        return res.status(500).json({ error: 'Storage upload failed' });
       }
-
-      // Use name from body if provided, otherwise use original filename
-      const fileName = name || file.originalname;
-
-      // Save file metadata to Firestore
-      const fileData = {
-        name: fileName,
-        description: description || '',
-        fileUrl,
-        storagePath,
-        fileType: fileExtension.toLowerCase(),
-        fileSize: file.size,
-        mimeType: file.mimetype,
-        uploaderId: userId,
-        createdAt: FieldValue.serverTimestamp(),
-      };
-
-      await db.collection('groups').doc(groupId).collection('files').doc(fileId).set(fileData);
-
-      console.log('[File Upload] File metadata saved to Firestore');
-
-      // Get uploader info for response
-      let uploaderData: any = {};
-      try {
-        const uploaderDoc = await db.collection('users').doc(userId).get();
-        uploaderData = uploaderDoc.data() || {};
-      } catch (userError) {
-        console.warn('[File Upload] Could not fetch uploader info:', userError);
-      }
-
-      console.log('[File Upload] Upload successful');
-
-      res.status(200).json({ 
-        message: 'File uploaded successfully',
-        id: fileId,
-        name: fileName,
-        description: description || '',
-        fileUrl,
-        fileType: fileExtension.toLowerCase(),
-        fileSize: file.size,
-        createdAt: new Date().toISOString(),
-        uploader: {
-          username: uploaderData?.username || 'Unknown',
-          firstName: uploaderData?.firstName || null,
-          profileImageUrl: uploaderData?.profileImageUrl || '',
-        },
-      });
-    } catch (storageError: any) {
-      console.error('[File Upload] ❌ Firebase Storage error occurred');
-      console.error('[File Upload] Error code:', storageError.code);
-      console.error('[File Upload] Error message:', storageError.message);
-      console.error('[File Upload] Error stack:', storageError.stack);
-      console.error('[File Upload] Bucket name attempted:', bucket.name);
-      console.error('[File Upload] Storage path attempted:', storagePath);
-      console.error('[File Upload] Full path: gs://' + bucket.name + '/' + storagePath);
-      
-      // Provide more specific error messages
-      if (storageError.code === 'ENOENT' || storageError.message?.includes('bucket')) {
-        return res.status(500).json({ 
-          error: 'Storage bucket not found. Please check Firebase Storage configuration.',
-          details: storageError.message,
-          bucketName: bucket.name,
-          bucketUrl: `gs://${bucket.name}`,
-          suggestion: 'Ensure the storage bucket exists in Firebase Console and matches the configured bucket name.'
-        });
-      }
-      
-      if (storageError.code === 403 || storageError.message?.includes('permission') || storageError.message?.includes('Permission denied')) {
-        return res.status(500).json({ 
-          error: 'Permission denied accessing Firebase Storage. Please check IAM permissions.',
-          details: storageError.message,
-          bucketName: bucket.name,
-          suggestion: 'Ensure the service account has Storage Admin or Storage Object Admin role in Firebase Console.'
-        });
-      }
-      
-      if (storageError.code === 404 || storageError.message?.includes('not found')) {
-        return res.status(500).json({ 
-          error: 'Storage bucket or file not found.',
-          details: storageError.message,
-          bucketName: bucket.name,
-          bucketUrl: `gs://${bucket.name}`,
-          suggestion: 'Verify the bucket exists in Firebase Console > Storage.'
-        });
-      }
-      
-      return res.status(500).json({ 
-        error: 'Failed to upload file to storage.',
-        details: storageError.message || 'Unknown storage error',
-        bucketName: bucket.name,
-        bucketUrl: `gs://${bucket.name}`,
-        errorCode: storageError.code
-      });
     }
+
+    // Save file metadata to Firestore
+    const fileName = name || (req.file ? req.file.originalname : 'file');
+
+    const fileData = {
+      name: fileName,
+      description: description || '',
+      fileUrl: finalFileUrl,
+      storagePath, // Empty if Cloudinary
+      fileType: finalFileExtension.toLowerCase(),
+      fileSize: finalFileSize,
+      mimeType: finalMimeType,
+      uploaderId: userId,
+      createdAt: FieldValue.serverTimestamp(),
+    };
+
+    await db.collection('groups').doc(groupId).collection('files').doc(fileId).set(fileData);
+
+    // Get uploader info for response
+    let uploaderData: any = {};
+    try {
+      const uploaderDoc = await db.collection('users').doc(userId).get();
+      uploaderData = uploaderDoc.data() || {};
+    } catch (userError) {
+      console.warn('[File Upload] Could not fetch uploader info:', userError);
+    }
+
+    res.status(200).json({
+      message: 'File uploaded successfully',
+      id: fileId,
+      name: fileName,
+      description: description || '',
+      fileUrl: finalFileUrl,
+      fileType: finalFileExtension.toLowerCase(),
+      fileSize: finalFileSize,
+      createdAt: new Date().toISOString(),
+      uploader: {
+        username: uploaderData?.username || 'Unknown',
+        firstName: uploaderData?.firstName || null,
+        profileImageUrl: uploaderData?.profileImageUrl || '',
+      },
+    });
   } catch (error: any) {
     console.error('[File Upload] Unexpected error uploading file:', error);
     console.error('[File Upload] Error name:', error?.name);
     console.error('[File Upload] Error message:', error?.message);
     console.error('[File Upload] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-    
+
     // Return detailed error for debugging (in development)
-    const errorMessage = process.env.NODE_ENV === 'development' 
+    const errorMessage = process.env.NODE_ENV === 'development'
       ? error.message || 'Failed to upload file.'
       : 'Failed to upload file. Please try again.';
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: errorMessage,
-      ...(process.env.NODE_ENV === 'development' && { 
+      ...(process.env.NODE_ENV === 'development' && {
         details: error.stack,
-        code: error.code 
+        code: error.code
       })
     });
   }
@@ -562,14 +477,14 @@ export const getFileDownloadUrl = async (req: Request, res: Response) => {
         expires: Date.now() + 60 * 60 * 1000, // 1 hour
       });
 
-      return res.status(200).json({ 
+      return res.status(200).json({
         downloadUrl: signedUrl,
         fileName: fileData.name,
       });
     }
 
     // Otherwise, return the stored URL
-    res.status(200).json({ 
+    res.status(200).json({
       downloadUrl: fileData?.fileUrl || '',
       fileName: fileData?.name || 'file',
     });
@@ -600,14 +515,14 @@ const verifyFriendship = async (userId1: string, userId2: string): Promise<boole
     // Check if conversation exists between users
     const chatId = getChatId(userId1, userId2);
     const chatDoc = await db.collection('chats').doc(chatId).get();
-    
+
     if (chatDoc.exists) {
       const chatData = chatDoc.data();
       // Verify both users are participants
-      return chatData?.participantIds?.includes(userId1) && 
-             chatData?.participantIds?.includes(userId2);
+      return chatData?.participantIds?.includes(userId1) &&
+        chatData?.participantIds?.includes(userId2);
     }
-    
+
     return false;
   } catch (error) {
     console.error('[File Controller] Error verifying friendship:', error);
@@ -733,162 +648,119 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
 
     console.log(`[Direct File Upload] ✅ Friendship verified`);
 
-    // Check if file was uploaded
-    if (!req.file) {
-      console.log('[Direct File Upload] No file uploaded');
-      return res.status(400).json({ error: 'No file uploaded.' });
+    // Check if file was uploaded or url provided
+    if (!req.file && !req.body.fileUrl) {
+      return res.status(400).json({ error: 'No file uploaded and no URL provided.' });
     }
 
-    const file = req.file;
-    const { name, description } = req.body;
-
-    console.log('[Direct File Upload] File info:', {
-      originalname: file.originalname,
-      mimetype: file.mimetype,
-      size: file.size,
-    });
-
-    // Validate file buffer
-    if (!file.buffer || file.buffer.length === 0) {
-      return res.status(400).json({ error: 'File buffer is empty.' });
-    }
-
-    // Validate file size
-    if (file.size > MAX_FILE_SIZE) {
-      return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
-    }
-
-    // Validate file type
-    if (!ALLOWED_TYPES.includes(file.mimetype)) {
-      return res.status(400).json({
-        error: 'File type not allowed. Allowed types: PDF, DOCX, PPTX, JPG, PNG, GIF, TXT, ZIP',
-      });
-    }
-
-    // Generate unique file ID and path
+    const { name, description, fileUrl, fileType, fileSize, mimeType } = req.body;
+    let finalFileUrl = fileUrl;
+    let storagePath = '';
+    let finalFileSize = fileSize ? parseInt(fileSize) : 0;
+    let finalMimeType = mimeType || '';
+    let finalFileExtension = fileType || '';
     const fileId = nanoid(16);
-    const fileExtension = file.originalname.split('.').pop() || 'bin';
-    const timestamp = Date.now();
     const chatId = getChatId(userId, friendId);
-    
-    // Storage path: direct/{senderId}/{receiverId}/{timestamp}_{originalFileName}
-    const storagePath = `direct/${userId}/${friendId}/${timestamp}_${file.originalname}`;
 
-    console.log(`[Direct File Upload] Storage path: ${storagePath}`);
-
-    // Upload to Firebase Storage
-    try {
-      const fileRef = bucket.file(storagePath);
-
-      await fileRef.save(file.buffer, {
-        metadata: {
-          contentType: file.mimetype,
-          metadata: {
-            senderId: userId,
-            receiverId: friendId,
-            chatId: chatId,
-            originalName: file.originalname,
-          },
-        },
-      });
-
-      console.log('[Direct File Upload] ✅ File saved to Firebase Storage');
-
-      // Generate URL
-      let fileUrl: string;
-      try {
-        await fileRef.makePublic();
-        fileUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-        console.log('[Direct File Upload] ✅ File made public');
-      } catch (makePublicError: any) {
-        console.warn('[Direct File Upload] Could not make file public, generating signed URL');
-        const [signedUrl] = await fileRef.getSignedUrl({
-          action: 'read',
-          expires: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year
-        });
-        fileUrl = signedUrl;
+    // If file uploaded via Multer (Firebase)
+    if (req.file) {
+      const file = req.file;
+      if (!file.buffer || file.buffer.length === 0) {
+        return res.status(400).json({ error: 'File buffer is empty.' });
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
       }
 
-      // Use name from body if provided, otherwise use original filename
-      const fileName = name || file.originalname;
+      finalFileSize = file.size;
+      finalMimeType = file.mimetype;
+      finalFileExtension = file.originalname.split('.').pop() || 'bin';
+      const timestamp = Date.now();
+      storagePath = `direct/${userId}/${friendId}/${timestamp}_${file.originalname}`;
 
-      // Save file metadata to Firestore in directFiles collection
-      const fileData: any = {
-        name: fileName,
-        description: description || '',
-        fileUrl,
-        storagePath,
-        fileType: fileExtension.toLowerCase(),
-        fileSize: file.size,
-        mimeType: file.mimetype,
+      try {
+        const fileRef = bucket.file(storagePath);
+        await fileRef.save(file.buffer, {
+          metadata: {
+            contentType: file.mimetype,
+            metadata: { senderId: userId, receiverId: friendId, chatId: chatId, originalName: file.originalname },
+          },
+        });
+
+        try {
+          await fileRef.makePublic();
+          finalFileUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+        } catch (e) {
+          const [signedUrl] = await fileRef.getSignedUrl({ action: 'read', expires: Date.now() + 31536000000 });
+          finalFileUrl = signedUrl;
+        }
+      } catch (storageError: any) {
+        console.error('Direct upload failed:', storageError);
+        return res.status(500).json({ error: 'Storage upload failed' });
+      }
+    }
+
+    const fileName = name || (req.file ? req.file.originalname : 'file');
+
+    const fileData: any = {
+      name: fileName,
+      description: description || '',
+      fileUrl: finalFileUrl,
+      storagePath,
+      fileType: finalFileExtension.toLowerCase(),
+      fileSize: finalFileSize,
+      mimeType: finalMimeType,
+      senderId: userId,
+      receiverId: friendId,
+      chatId: chatId,
+      createdAt: FieldValue.serverTimestamp(),
+    };
+
+    await db.collection('directFiles').doc(fileId).set(fileData);
+
+    // Get sender info
+    let senderData: any = {};
+    try {
+      const senderDoc = await db.collection('users').doc(userId).get();
+      senderData = senderDoc.data() || {};
+    } catch (e) { console.warn('Could not fetch sender info'); }
+
+    // Add message to chat
+    try {
+      const messageData = {
+        content: `📎 Shared a file: ${fileName}`,
         senderId: userId,
-        receiverId: friendId,
-        chatId: chatId,
+        senderName: senderData?.firstName ? `${senderData.firstName} ${senderData.lastName || ''}`.trim() : senderData?.username || 'Unknown',
+        senderProfileImageUrl: senderData?.profileImageUrl || '',
+        type: 'file',
+        fileId: fileId,
+        fileName: fileName,
+        fileUrl: finalFileUrl,
+        fileType: finalFileExtension.toLowerCase(),
+        fileSize: finalFileSize,
         createdAt: FieldValue.serverTimestamp(),
       };
+      await db.collection('chats').doc(chatId).collection('messages').add(messageData);
+    } catch (msgError) { console.warn('Could not add file message to chat', msgError); }
 
-      await db.collection('directFiles').doc(fileId).set(fileData);
-
-      console.log('[Direct File Upload] ✅ File metadata saved to Firestore');
-
-      // Get sender info for response
-      let senderData: any = {};
-      try {
-        const senderDoc = await db.collection('users').doc(userId).get();
-        senderData = senderDoc.data() || {};
-      } catch (e) {
-        console.warn('[Direct File Upload] Could not fetch sender info');
-      }
-
-      // Also create a message in the chat to notify about the file
-      try {
-        const messageData = {
-          content: `📎 Shared a file: ${fileName}`,
-          senderId: userId,
-          senderName: senderData?.firstName 
-            ? `${senderData.firstName} ${senderData.lastName || ''}`.trim() 
-            : senderData?.username || 'Unknown',
-          senderProfileImageUrl: senderData?.profileImageUrl || '',
-          type: 'file',
-          fileId: fileId,
-          fileName: fileName,
-          fileUrl: fileUrl,
-          fileType: fileExtension.toLowerCase(),
-          fileSize: file.size,
-          createdAt: FieldValue.serverTimestamp(),
-        };
-
-        await db.collection('chats').doc(chatId).collection('messages').add(messageData);
-        console.log('[Direct File Upload] ✅ File message added to chat');
-      } catch (msgError) {
-        console.warn('[Direct File Upload] Could not add file message to chat:', msgError);
-      }
-
-      res.status(200).json({
-        message: 'File uploaded successfully',
-        id: fileId,
-        name: fileName,
-        description: description || '',
-        fileUrl,
-        fileType: fileExtension.toLowerCase(),
-        fileSize: file.size,
-        senderId: userId,
-        receiverId: friendId,
-        createdAt: new Date().toISOString(),
-        uploader: {
-          id: userId,
-          username: senderData?.username || 'Unknown',
-          firstName: senderData?.firstName || null,
-          profileImageUrl: senderData?.profileImageUrl || '',
-        },
-      });
-    } catch (storageError: any) {
-      console.error('[Direct File Upload] ❌ Storage error:', storageError);
-      return res.status(500).json({
-        error: 'Failed to upload file to storage.',
-        details: storageError.message,
-      });
-    }
+    res.status(200).json({
+      message: 'File uploaded successfully',
+      id: fileId,
+      name: fileName,
+      description: description || '',
+      fileUrl: finalFileUrl,
+      fileType: finalFileExtension.toLowerCase(),
+      fileSize: finalFileSize,
+      senderId: userId,
+      receiverId: friendId,
+      createdAt: new Date().toISOString(),
+      uploader: {
+        id: userId,
+        username: senderData?.username || 'Unknown',
+        firstName: senderData?.firstName || null,
+        profileImageUrl: senderData?.profileImageUrl || '',
+      },
+    });
   } catch (error: any) {
     console.error('[Direct File Upload] Unexpected error:', error);
     res.status(500).json({ error: 'Failed to upload file.' });

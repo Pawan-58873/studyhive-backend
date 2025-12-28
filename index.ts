@@ -44,6 +44,7 @@ import adminRoutes from './src/api/admin.routes.ts';
 import fileRoutes from './src/api/file.routes.ts';
 import directFileRoutes from './src/api/direct-file.routes.ts';
 import aiRoutes from './src/api/ai.routes.ts';
+import uploadRoutes from './src/api/upload.routes.ts';
 import { db } from './src/config/firebase.ts';
 
 const app = express();
@@ -124,29 +125,34 @@ app.get('/api/debug/firestore', async (req, res) => {
   try {
     console.log('🔍 Testing Firestore connection...');
     const startTime = Date.now();
-    
+
+    if (!db) {
+      throw new Error('Firestore not initialized');
+    }
+
     // Test 1: List collections
     const collections = await db.listCollections();
     const collectionNames = collections.map(c => c.id);
     console.log('📁 Collections found:', collectionNames);
-    
+
     // Test 2: Count users
     const usersSnapshot = await db.collection('users').limit(10).get();
     console.log('👥 Users found:', usersSnapshot.size);
-    
+
     const users = usersSnapshot.docs.map(doc => ({
       id: doc.id,
       email: doc.data().email,
       role: doc.data().role,
       username: doc.data().username
     }));
-    
+
     // Test 3: Count groups WITH members
     const groupsSnapshot = await db.collection('groups').limit(10).get();
     console.log('📂 Groups found:', groupsSnapshot.size);
-    
+
     const groups = await Promise.all(groupsSnapshot.docs.map(async (doc) => {
-      const membersSnap = await db.collection('groups').doc(doc.id).collection('members').get();
+      // We already checked db is not null above
+      const membersSnap = await db!.collection('groups').doc(doc.id).collection('members').get();
       return {
         id: doc.id,
         name: doc.data().name,
@@ -155,11 +161,11 @@ app.get('/api/debug/firestore', async (req, res) => {
         members: membersSnap.docs.map(m => ({ id: m.id, ...m.data() }))
       };
     }));
-    
+
     const totalMembers = groups.reduce((sum, g) => sum + g.memberCount, 0);
-    
+
     const endTime = Date.now();
-    
+
     res.json({
       status: 'OK',
       duration: `${endTime - startTime}ms`,
@@ -172,10 +178,10 @@ app.get('/api/debug/firestore', async (req, res) => {
     });
   } catch (error: any) {
     console.error('❌ Firestore test failed:', error);
-    res.status(500).json({ 
-      status: 'ERROR', 
+    res.status(500).json({
+      status: 'ERROR',
       error: error.message,
-      code: error.code 
+      code: error.code
     });
   }
 });
@@ -185,10 +191,14 @@ app.get('/api/setup/create-admin/:uid/:email', async (req, res) => {
   try {
     const { uid, email } = req.params;
     console.log('🔧 Creating admin user:', uid, email);
-    
+
+    if (!db) {
+      throw new Error('Firestore not initialized');
+    }
+
     // Check if user already exists
     const userDoc = await db.collection('users').doc(uid).get();
-    
+
     if (userDoc.exists) {
       // Update to admin
       await db.collection('users').doc(uid).update({ role: 'admin' });
@@ -204,12 +214,12 @@ app.get('/api/setup/create-admin/:uid/:email', async (req, res) => {
         createdAt: new Date(),
         updatedAt: new Date()
       });
-      
+
       // Also create username mapping
       await db.collection('usernames').doc(email.split('@')[0].toLowerCase()).set({
         uid: uid
       });
-      
+
       console.log('✅ Created new admin user');
       res.json({ status: 'OK', message: 'Admin user created', existed: false });
     }
@@ -233,6 +243,7 @@ app.use('/api/sessions', sessionRoutes);
 app.use('/api/liveblocks', liveblocksRoutes); // Liveblocks routes enabled
 app.use('/api/admin', adminRoutes); // Admin routes for dashboard management
 app.use('/api/ai', aiRoutes); // AI routes for summarization and study tools
+app.use('/api/upload', uploadRoutes); // Upload routes for Cloudinary
 
 const server = http.createServer(app);
 
@@ -253,12 +264,12 @@ io.on('connection', (socket) => {
   // Jab client connect ho kar apni details bhejta hai
   socket.on('register', (user: { uid: string; name: string; profileImageUrl?: string }) => {
     if (user && user.uid) {
-        onlineUsers.set(user.uid, {
-            socketId: socket.id,
-            name: user.name,
-            profileImageUrl: user.profileImageUrl
-        });
-        console.log(`✅ User registered: ${user.name} is on socket ${socket.id}`);
+      onlineUsers.set(user.uid, {
+        socketId: socket.id,
+        name: user.name,
+        profileImageUrl: user.profileImageUrl
+      });
+      console.log(`✅ User registered: ${user.name} is on socket ${socket.id}`);
     }
   });
 
