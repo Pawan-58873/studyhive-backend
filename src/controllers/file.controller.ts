@@ -2,9 +2,11 @@
 // File Management Controller - Handles file upload, fetch, and delete for group and direct files
 
 import { Request, Response } from 'express';
-import { db, admin } from '../config/firebase';
+import { db, admin } from '../config/firebase.ts';
 import { FieldValue } from 'firebase-admin/firestore';
 import { nanoid } from 'nanoid';
+import cloudinary from '../config/cloudinary.ts';
+import { Readable } from 'stream';
 
 // ========================================
 // TYPES
@@ -266,13 +268,12 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
       });
     }
 
-    const { name, description, fileUrl, fileType, fileSize, mimeType } = req.body;
-    let finalFileUrl = fileUrl;
+    const { name, description, fileUrl: bodyFileUrl, fileType, fileSize, mimeType } = req.body;
+    let finalFileUrl = bodyFileUrl;
     let storagePath = '';
     let finalFileSize = fileSize ? parseInt(fileSize) : 0;
     let finalMimeType = mimeType || '';
     let finalFileExtension = fileType || '';
-    const fileId = nanoid(16);
 
     // If file is provided via Multer (Firebase Storage)
     if (req.file) {
@@ -302,79 +303,129 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
         });
       }
 
-      finalFileSize = file.size;
-      finalMimeType = file.mimetype;
-      finalFileExtension = file.originalname.split('.').pop() || 'bin';
-      storagePath = `groups/${groupId}/files/${fileId}.${finalFileExtension}`;
+      // Generate unique file ID
+      const fileId = nanoid(16);
+      const fileExtension = file.originalname.split('.').pop() || 'bin';
 
-      // Upload to Firebase Storage
+      // Upload to Cloudinary using stream
+      let fileUrl: string;
+
       try {
-        const fileRef = bucket.file(storagePath);
-        await fileRef.save(file.buffer, {
-          metadata: {
-            contentType: file.mimetype,
-            metadata: {
-              uploaderId: userId,
-              groupId: groupId,
-              originalName: file.originalname,
+        console.log(`[File Upload] Starting Cloudinary upload for ${file.originalname}`);
+
+        fileUrl = await new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              folder: `groups/${groupId}`,
+              resource_type: 'auto',
+              public_id: `${fileId}`, // Optional: set custom public ID
+              use_filename: true
             },
-          },
+            (error, result) => {
+              if (error) {
+                console.error('[File Upload] Cloudinary error:', error);
+                reject(error);
+              } else {
+                console.log('[File Upload] Cloudinary success:', result?.secure_url);
+                resolve(result!.secure_url);
+              }
+            }
+          );
+
+          // Create a readable stream from buffer
+          const stream = Readable.from(file.buffer);
+          stream.pipe(uploadStream);
         });
 
-        try {
-          await fileRef.makePublic();
-          finalFileUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-        } catch (e) {
-          const [signedUrl] = await fileRef.getSignedUrl({ action: 'read', expires: Date.now() + 31536000000 });
-          finalFileUrl = signedUrl;
-        }
-      } catch (storageError: any) {
-        console.error('[File Upload] Firebase Storage Error:', storageError);
-        return res.status(500).json({ error: 'Storage upload failed' });
+      } catch (uploadError: any) {
+        console.error('[File Upload] Upload failed:', uploadError);
+        return res.status(500).json({ error: 'Storage upload failed', details: uploadError.message });
       }
+
+      const fileName = name || file.originalname;
+
+      // Save file metadata to Firestore
+      const fileData = {
+        name: fileName,
+        description: description || '',
+        fileUrl,
+        storagePath: `groups/${groupId}/${fileId}`, // Keep a reference, though Cloudinary manages it
+        fileType: fileExtension.toLowerCase(),
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        uploaderId: userId,
+        createdAt: FieldValue.serverTimestamp(),
+      };
+
+      await db.collection('groups').doc(groupId).collection('files').doc(fileId).set(fileData);
+
+      // Get uploader info for response
+      let uploaderData: any = {};
+      try {
+        const uploaderDoc = await db.collection('users').doc(userId).get();
+        uploaderData = uploaderDoc.data() || {};
+      } catch (userError) {
+        console.warn('[File Upload] Could not fetch uploader info:', userError);
+      }
+
+      res.status(200).json({
+        message: 'File uploaded successfully',
+        id: fileId,
+        name: fileName,
+        description: description || '',
+        fileUrl,
+        fileType: fileExtension.toLowerCase(),
+        fileSize: file.size,
+        createdAt: new Date().toISOString(),
+        uploader: {
+          username: uploaderData?.username || 'Unknown',
+          firstName: uploaderData?.firstName || null,
+          profileImageUrl: uploaderData?.profileImageUrl || '',
+        },
+      });
+    } else { // If fileUrl provided in body
+      const fileId = nanoid(16);
+      const fileName = name || 'file';
+
+      const fileData = {
+        name: fileName,
+        description: description || '',
+        fileUrl: finalFileUrl,
+        storagePath, // Empty if Cloudinary
+        fileType: finalFileExtension.toLowerCase(),
+        fileSize: finalFileSize,
+        mimeType: finalMimeType,
+        uploaderId: userId,
+        createdAt: FieldValue.serverTimestamp(),
+      };
+
+      await db.collection('groups').doc(groupId).collection('files').doc(fileId).set(fileData);
+
+      // Get uploader info for response
+      let uploaderData: any = {};
+      try {
+        const uploaderDoc = await db.collection('users').doc(userId).get();
+        uploaderData = uploaderDoc.data() || {};
+      } catch (userError) {
+        console.warn('[File Upload] Could not fetch uploader info:', userError);
+      }
+
+      res.status(200).json({
+        message: 'File uploaded successfully',
+        id: fileId,
+        name: fileName,
+        description: description || '',
+        fileUrl: finalFileUrl,
+        fileType: finalFileExtension.toLowerCase(),
+        fileSize: finalFileSize,
+        createdAt: new Date().toISOString(),
+        uploader: {
+          username: uploaderData?.username || 'Unknown',
+          firstName: uploaderData?.firstName || null,
+          profileImageUrl: uploaderData?.profileImageUrl || '',
+        },
+      });
     }
-
-    // Save file metadata to Firestore
-    const fileName = name || (req.file ? req.file.originalname : 'file');
-
-    const fileData = {
-      name: fileName,
-      description: description || '',
-      fileUrl: finalFileUrl,
-      storagePath, // Empty if Cloudinary
-      fileType: finalFileExtension.toLowerCase(),
-      fileSize: finalFileSize,
-      mimeType: finalMimeType,
-      uploaderId: userId,
-      createdAt: FieldValue.serverTimestamp(),
-    };
-
-    await db.collection('groups').doc(groupId).collection('files').doc(fileId).set(fileData);
-
-    // Get uploader info for response
-    let uploaderData: any = {};
-    try {
-      const uploaderDoc = await db.collection('users').doc(userId).get();
-      uploaderData = uploaderDoc.data() || {};
-    } catch (userError) {
-      console.warn('[File Upload] Could not fetch uploader info:', userError);
-    }
-
-    res.status(200).json({
-      message: 'File uploaded successfully',
-      id: fileId,
-      name: fileName,
-      description: description || '',
-      fileUrl: finalFileUrl,
-      fileType: finalFileExtension.toLowerCase(),
-      fileSize: finalFileSize,
-      createdAt: new Date().toISOString(),
-      uploader: {
-        username: uploaderData?.username || 'Unknown',
-        firstName: uploaderData?.firstName || null,
-        profileImageUrl: uploaderData?.profileImageUrl || '',
-      },
-    });
   } catch (error: any) {
     console.error('[File Upload] Unexpected error uploading file:', error);
     console.error('[File Upload] Error name:', error?.name);
@@ -428,12 +479,20 @@ export const deleteGroupFile = async (req: Request, res: Response) => {
     }
 
     // Delete from Firebase Storage if storagePath exists
-    if (fileData?.storagePath) {
+    if (fileData?.storagePath && bucket && fileData.storagePath.startsWith('groups/')) { // Check if it's a Firebase Storage path
       try {
         await bucket.file(fileData.storagePath).delete();
       } catch (storageError) {
         console.warn('Could not delete file from storage:', storageError);
         // Continue with Firestore deletion even if storage deletion fails
+      }
+    } else if (fileData?.storagePath && fileData.storagePath.startsWith('groups/')) { // Assume Cloudinary public_id
+      try {
+        const publicId = fileData.storagePath.split('/').slice(0, -1).join('/') + '/' + fileData.storagePath.split('/').pop()?.split('.')[0];
+        await cloudinary.uploader.destroy(publicId);
+        console.log(`[File Delete] Cloudinary file ${publicId} deleted.`);
+      } catch (cloudinaryError) {
+        console.warn('[File Delete] Could not delete file from Cloudinary:', cloudinaryError);
       }
     }
 
@@ -471,7 +530,7 @@ export const getFileDownloadUrl = async (req: Request, res: Response) => {
     const fileData = fileDoc.data();
 
     // If there's a storage path, generate a signed URL
-    if (fileData?.storagePath) {
+    if (fileData?.storagePath && bucket && fileData.storagePath.startsWith('groups/')) { // Firebase Storage
       const [signedUrl] = await bucket.file(fileData.storagePath).getSignedUrl({
         action: 'read',
         expires: Date.now() + 60 * 60 * 1000, // 1 hour
@@ -481,9 +540,15 @@ export const getFileDownloadUrl = async (req: Request, res: Response) => {
         downloadUrl: signedUrl,
         fileName: fileData.name,
       });
+    } else if (fileData?.fileUrl) { // Cloudinary or external URL
+      // Cloudinary URLs are generally public, no need for signed URL unless specific settings
+      return res.status(200).json({
+        downloadUrl: fileData.fileUrl,
+        fileName: fileData.name,
+      });
     }
 
-    // Otherwise, return the stored URL
+    // Otherwise, return the stored URL (fallback)
     res.status(200).json({
       downloadUrl: fileData?.fileUrl || '',
       fileName: fileData?.name || 'file',
@@ -653,13 +718,12 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No file uploaded and no URL provided.' });
     }
 
-    const { name, description, fileUrl, fileType, fileSize, mimeType } = req.body;
-    let finalFileUrl = fileUrl;
+    const { name, description, fileUrl: bodyFileUrl, fileType, fileSize, mimeType } = req.body;
+    let finalFileUrl = bodyFileUrl;
     let storagePath = '';
     let finalFileSize = fileSize ? parseInt(fileSize) : 0;
     let finalMimeType = mimeType || '';
     let finalFileExtension = fileType || '';
-    const fileId = nanoid(16);
     const chatId = getChatId(userId, friendId);
 
     // If file uploaded via Multer (Firebase)
@@ -672,95 +736,180 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'File size exceeds 10MB limit.' });
       }
 
-      finalFileSize = file.size;
-      finalMimeType = file.mimetype;
-      finalFileExtension = file.originalname.split('.').pop() || 'bin';
+      // Generate unique file ID
+      const fileId = nanoid(16);
+      const fileExtension = file.originalname.split('.').pop() || 'bin';
       const timestamp = Date.now();
-      storagePath = `direct/${userId}/${friendId}/${timestamp}_${file.originalname}`;
+
+      // Upload to Cloudinary using stream
+      let fileUrl: string;
 
       try {
-        const fileRef = bucket.file(storagePath);
-        await fileRef.save(file.buffer, {
-          metadata: {
-            contentType: file.mimetype,
-            metadata: { senderId: userId, receiverId: friendId, chatId: chatId, originalName: file.originalname },
-          },
+        console.log(`[Direct Upload] Starting Cloudinary upload for ${file.originalname}`);
+
+        fileUrl = await new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+            {
+              folder: `direct/${userId}/${friendId}`,
+              resource_type: 'auto',
+              public_id: `${timestamp}_${fileId}`,
+              use_filename: true
+            },
+            (error, result) => {
+              if (error) {
+                console.error('[Direct Upload] Cloudinary error:', error);
+                reject(error);
+              } else {
+                console.log('[Direct Upload] Cloudinary success:', result?.secure_url);
+                resolve(result!.secure_url);
+              }
+            }
+          );
+
+          // Create a readable stream from buffer
+          const stream = Readable.from(file.buffer);
+          stream.pipe(uploadStream);
         });
 
-        try {
-          await fileRef.makePublic();
-          finalFileUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-        } catch (e) {
-          const [signedUrl] = await fileRef.getSignedUrl({ action: 'read', expires: Date.now() + 31536000000 });
-          finalFileUrl = signedUrl;
-        }
-      } catch (storageError: any) {
-        console.error('Direct upload failed:', storageError);
-        return res.status(500).json({ error: 'Storage upload failed' });
+      } catch (uploadError: any) {
+        console.error('[Direct Upload] Upload failed:', uploadError);
+        return res.status(500).json({ error: 'Storage upload failed', details: uploadError.message });
       }
-    }
 
-    const fileName = name || (req.file ? req.file.originalname : 'file');
+      const fileName = name || file.originalname;
 
-    const fileData: any = {
-      name: fileName,
-      description: description || '',
-      fileUrl: finalFileUrl,
-      storagePath,
-      fileType: finalFileExtension.toLowerCase(),
-      fileSize: finalFileSize,
-      mimeType: finalMimeType,
-      senderId: userId,
-      receiverId: friendId,
-      chatId: chatId,
-      createdAt: FieldValue.serverTimestamp(),
-    };
-
-    await db.collection('directFiles').doc(fileId).set(fileData);
-
-    // Get sender info
-    let senderData: any = {};
-    try {
-      const senderDoc = await db.collection('users').doc(userId).get();
-      senderData = senderDoc.data() || {};
-    } catch (e) { console.warn('Could not fetch sender info'); }
-
-    // Add message to chat
-    try {
-      const messageData = {
-        content: `📎 Shared a file: ${fileName}`,
+      // Save file metadata to Firestore in directFiles collection
+      const fileData: any = {
+        name: fileName,
+        description: description || '',
+        fileUrl,
+        storagePath: `direct/${userId}/${friendId}/${fileId}`, // Reference path
+        fileType: fileExtension.toLowerCase(),
+        fileSize: file.size,
+        mimeType: file.mimetype,
         senderId: userId,
-        senderName: senderData?.firstName ? `${senderData.firstName} ${senderData.lastName || ''}`.trim() : senderData?.username || 'Unknown',
-        senderProfileImageUrl: senderData?.profileImageUrl || '',
-        type: 'file',
-        fileId: fileId,
-        fileName: fileName,
+        receiverId: friendId,
+        chatId: chatId,
+        createdAt: FieldValue.serverTimestamp(),
+      };
+
+      await db.collection('directFiles').doc(fileId).set(fileData);
+
+      // Get sender info for response
+      let senderData: any = {};
+      try {
+        const senderDoc = await db.collection('users').doc(userId).get();
+        senderData = senderDoc.data() || {};
+      } catch (e) {
+        console.warn('[Direct File Upload] Could not fetch sender info');
+      }
+
+      // Also create a message in the chat to notify about the file
+      try {
+        const messageData = {
+          content: `📎 Shared a file: ${fileName}`,
+          senderId: userId,
+          senderName: senderData?.firstName
+            ? `${senderData.firstName} ${senderData.lastName || ''}`.trim()
+            : senderData?.username || 'Unknown',
+          senderProfileImageUrl: senderData?.profileImageUrl || '',
+          type: 'file',
+          fileId: fileId,
+          fileName: fileName,
+          fileUrl: fileUrl,
+          fileType: fileExtension.toLowerCase(),
+          fileSize: file.size,
+          createdAt: FieldValue.serverTimestamp(),
+        };
+
+        await db.collection('chats').doc(chatId).collection('messages').add(messageData);
+        console.log('[Direct File Upload] ✅ File message added to chat');
+      } catch (msgError) {
+        console.warn('[Direct File Upload] Could not add file message to chat:', msgError);
+      }
+
+      res.status(200).json({
+        message: 'File uploaded successfully',
+        id: fileId,
+        name: fileName,
+        description: description || '',
+        fileUrl,
+        fileType: fileExtension.toLowerCase(),
+        fileSize: file.size,
+        senderId: userId,
+        receiverId: friendId,
+        createdAt: new Date().toISOString(),
+        uploader: {
+          id: userId,
+          username: senderData?.username || 'Unknown',
+          firstName: senderData?.firstName || null,
+          profileImageUrl: senderData?.profileImageUrl || '',
+        },
+      });
+    } else { // If fileUrl provided in body
+      const fileId = nanoid(16);
+      const fileName = name || 'file';
+
+      const fileData: any = {
+        name: fileName,
+        description: description || '',
+        fileUrl: finalFileUrl,
+        storagePath,
+        fileType: finalFileExtension.toLowerCase(),
+        fileSize: finalFileSize,
+        mimeType: finalMimeType,
+        senderId: userId,
+        receiverId: friendId,
+        chatId: chatId,
+        createdAt: FieldValue.serverTimestamp(),
+      };
+
+      await db.collection('directFiles').doc(fileId).set(fileData);
+
+      // Get sender info
+      let senderData: any = {};
+      try {
+        const senderDoc = await db.collection('users').doc(userId).get();
+        senderData = senderDoc.data() || {};
+      } catch (e) { console.warn('Could not fetch sender info'); }
+
+      // Add message to chat
+      try {
+        const messageData = {
+          content: `📎 Shared a file: ${fileName}`,
+          senderId: userId,
+          senderName: senderData?.firstName ? `${senderData.firstName} ${senderData.lastName || ''}`.trim() : senderData?.username || 'Unknown',
+          senderProfileImageUrl: senderData?.profileImageUrl || '',
+          type: 'file',
+          fileId: fileId,
+          fileName: fileName,
+          fileUrl: finalFileUrl,
+          fileType: finalFileExtension.toLowerCase(),
+          fileSize: finalFileSize,
+          createdAt: FieldValue.serverTimestamp(),
+        };
+        await db.collection('chats').doc(chatId).collection('messages').add(messageData);
+      } catch (msgError) { console.warn('Could not add file message to chat', msgError); }
+
+      res.status(200).json({
+        message: 'File uploaded successfully',
+        id: fileId,
+        name: fileName,
+        description: description || '',
         fileUrl: finalFileUrl,
         fileType: finalFileExtension.toLowerCase(),
         fileSize: finalFileSize,
-        createdAt: FieldValue.serverTimestamp(),
-      };
-      await db.collection('chats').doc(chatId).collection('messages').add(messageData);
-    } catch (msgError) { console.warn('Could not add file message to chat', msgError); }
-
-    res.status(200).json({
-      message: 'File uploaded successfully',
-      id: fileId,
-      name: fileName,
-      description: description || '',
-      fileUrl: finalFileUrl,
-      fileType: finalFileExtension.toLowerCase(),
-      fileSize: finalFileSize,
-      senderId: userId,
-      receiverId: friendId,
-      createdAt: new Date().toISOString(),
-      uploader: {
-        id: userId,
-        username: senderData?.username || 'Unknown',
-        firstName: senderData?.firstName || null,
-        profileImageUrl: senderData?.profileImageUrl || '',
-      },
-    });
+        senderId: userId,
+        receiverId: friendId,
+        createdAt: new Date().toISOString(),
+        uploader: {
+          id: userId,
+          username: senderData?.username || 'Unknown',
+          firstName: senderData?.firstName || null,
+          profileImageUrl: senderData?.profileImageUrl || '',
+        },
+      });
+    }
   } catch (error: any) {
     console.error('[Direct File Upload] Unexpected error:', error);
     res.status(500).json({ error: 'Failed to upload file.' });
