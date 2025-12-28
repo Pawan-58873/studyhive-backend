@@ -163,7 +163,7 @@ export const getGroupFiles = async (req: Request, res: Response) => {
         };
 
         if (fileData.uploaderId) {
-          const uploaderDoc = await db.collection('users').doc(fileData.uploaderId).get();
+          const uploaderDoc = await db!.collection('users').doc(fileData.uploaderId).get();
           if (uploaderDoc.exists) {
             const uploaderData = uploaderDoc.data();
             uploader = {
@@ -653,7 +653,7 @@ export const getDirectFiles = async (req: Request, res: Response) => {
         };
 
         if (fileData.senderId) {
-          const uploaderDoc = await db.collection('users').doc(fileData.senderId).get();
+          const uploaderDoc = await db!.collection('users').doc(fileData.senderId).get();
           if (uploaderDoc.exists) {
             const uploaderData = uploaderDoc.data();
             uploader = {
