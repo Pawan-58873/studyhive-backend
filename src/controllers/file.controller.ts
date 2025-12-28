@@ -131,6 +131,9 @@ const ALLOWED_TYPES = [
  */
 export const getGroupFiles = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { groupId } = req.params;
     const userId = req.user!.uid;
 
@@ -207,6 +210,9 @@ export const getGroupFiles = async (req: Request, res: Response) => {
  */
 export const uploadGroupFile = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { groupId } = req.params;
     const userId = req.user!.uid;
 
@@ -453,6 +459,9 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
  */
 export const deleteGroupFile = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { groupId, fileId } = req.params;
     const userId = req.user!.uid;
 
@@ -512,6 +521,9 @@ export const deleteGroupFile = async (req: Request, res: Response) => {
  */
 export const getFileDownloadUrl = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { groupId, fileId } = req.params;
     const userId = req.user!.uid;
 
@@ -577,6 +589,9 @@ const getChatId = (uid1: string, uid2: string): string => {
  */
 const verifyFriendship = async (userId1: string, userId2: string): Promise<boolean> => {
   try {
+    if (!db) {
+      return false;
+    }
     // Check if conversation exists between users
     const chatId = getChatId(userId1, userId2);
     const chatDoc = await db.collection('chats').doc(chatId).get();
@@ -601,6 +616,9 @@ const verifyFriendship = async (userId1: string, userId2: string): Promise<boole
  */
 export const getDirectFiles = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { friendId } = req.params;
     const userId = req.user!.uid;
 
@@ -686,6 +704,9 @@ export const getDirectFiles = async (req: Request, res: Response) => {
  */
 export const uploadDirectFile = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { friendId } = req.params;
     const userId = req.user!.uid;
 
@@ -922,6 +943,9 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
  */
 export const deleteDirectFile = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { friendId, fileId } = req.params;
     const userId = req.user!.uid;
 
@@ -972,6 +996,9 @@ export const deleteDirectFile = async (req: Request, res: Response) => {
  */
 export const getDirectFileDownloadUrl = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).json({ error: 'Firestore not initialized.' });
+    }
     const { friendId, fileId } = req.params;
     const userId = req.user!.uid;
 
