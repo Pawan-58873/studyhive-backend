@@ -18,6 +18,7 @@ import {
     deleteGroup, // <-- NEW
     leaveGroup // <-- Add this line
 } from '../controllers/group.controller.js'; // Ensure .js for ESM compatibility
+import { getOrCreateDailyRoom } from '../controllers/daily.controller.js';
 
 const router = Router();
 
@@ -39,6 +40,9 @@ router.post('/:groupId/messages', sendGroupMessage);
 
 // Route to log a call event (missed call, call ended)
 router.post('/:groupId/log-call', logCallEvent);
+
+// --- Daily.co call route ---
+router.post('/:groupId/call', getOrCreateDailyRoom);
 
 // --- NEW: Group management routes ---
 router.patch('/:groupId', updateGroup); // Update group settings
