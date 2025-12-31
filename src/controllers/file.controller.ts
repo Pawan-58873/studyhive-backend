@@ -7,6 +7,8 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { nanoid } from 'nanoid';
 import cloudinary from '../config/cloudinary.ts';
 import { Readable } from 'stream';
+import { insertMessageSchema } from '../shared/schema';
+import { io } from '../../index';
 
 // ========================================
 // TYPES
@@ -365,13 +367,62 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
 
       await db.collection('groups').doc(groupId).collection('files').doc(fileId).set(fileData);
 
-      // Get uploader info for response
+      // Get uploader info for response and message
       let uploaderData: any = {};
       try {
         const uploaderDoc = await db.collection('users').doc(userId).get();
         uploaderData = uploaderDoc.data() || {};
       } catch (userError) {
         console.warn('[File Upload] Could not fetch uploader info:', userError);
+      }
+
+      // Create corresponding chat message and emit via Socket.IO
+      try {
+        const senderName =
+          uploaderData?.firstName
+            ? `${uploaderData.firstName} ${uploaderData.lastName || ''}`.trim()
+            : uploaderData?.username || 'Unknown';
+
+        const messagePayload = insertMessageSchema.parse({
+          content: `📎 Shared a file: ${fileName}`,
+          senderId: userId,
+          senderName,
+          senderProfileImageUrl: uploaderData?.profileImageUrl || '',
+          type: 'file',
+          fileUrl,
+          fileType: fileExtension.toLowerCase(),
+          fileName,
+          fileSize: file.size,
+        });
+
+        const messageRef = db.collection('groups').doc(groupId).collection('messages').doc();
+        await messageRef.set({
+          ...messagePayload,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+        const savedMessageDoc = await messageRef.get();
+        const savedData = savedMessageDoc.data();
+        if (savedData) {
+          const createdAtValue: any = (savedData as any).createdAt;
+          const createdAtIso =
+            createdAtValue && typeof createdAtValue.toDate === 'function'
+              ? createdAtValue.toDate().toISOString()
+              : new Date().toISOString();
+
+          const savedMessage = {
+            id: savedMessageDoc.id,
+            ...savedData,
+            createdAt: createdAtIso,
+          };
+
+          io.to(groupId).emit('newMessage', { message: savedMessage });
+        }
+      } catch (messageError: any) {
+        console.error('[File Upload] Failed to create or emit chat message for file upload:', messageError);
+        return res.status(500).json({
+          error: 'File upload stored, but failed to create chat message for this file.',
+        });
       }
 
       res.status(200).json({
@@ -407,13 +458,62 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
 
       await db.collection('groups').doc(groupId).collection('files').doc(fileId).set(fileData);
 
-      // Get uploader info for response
+      // Get uploader info for response and message
       let uploaderData: any = {};
       try {
         const uploaderDoc = await db.collection('users').doc(userId).get();
         uploaderData = uploaderDoc.data() || {};
       } catch (userError) {
         console.warn('[File Upload] Could not fetch uploader info:', userError);
+      }
+
+      // Create corresponding chat message and emit via Socket.IO
+      try {
+        const senderName =
+          uploaderData?.firstName
+            ? `${uploaderData.firstName} ${uploaderData.lastName || ''}`.trim()
+            : uploaderData?.username || 'Unknown';
+
+        const messagePayload = insertMessageSchema.parse({
+          content: `📎 Shared a file: ${fileName}`,
+          senderId: userId,
+          senderName,
+          senderProfileImageUrl: uploaderData?.profileImageUrl || '',
+          type: 'file',
+          fileUrl: finalFileUrl,
+          fileType: finalFileExtension.toLowerCase(),
+          fileName,
+          fileSize: finalFileSize,
+        });
+
+        const messageRef = db.collection('groups').doc(groupId).collection('messages').doc();
+        await messageRef.set({
+          ...messagePayload,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+
+        const savedMessageDoc = await messageRef.get();
+        const savedData = savedMessageDoc.data();
+        if (savedData) {
+          const createdAtValue: any = (savedData as any).createdAt;
+          const createdAtIso =
+            createdAtValue && typeof createdAtValue.toDate === 'function'
+              ? createdAtValue.toDate().toISOString()
+              : new Date().toISOString();
+
+          const savedMessage = {
+            id: savedMessageDoc.id,
+            ...savedData,
+            createdAt: createdAtIso,
+          };
+
+          io.to(groupId).emit('newMessage', { message: savedMessage });
+        }
+      } catch (messageError: any) {
+        console.error('[File Upload] Failed to create or emit chat message for fileUrl upload:', messageError);
+        return res.status(500).json({
+          error: 'File upload stored, but failed to create chat message for this file.',
+        });
       }
 
       res.status(200).json({

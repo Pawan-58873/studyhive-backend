@@ -46,6 +46,7 @@ import directFileRoutes from './src/api/direct-file.routes.ts';
 import aiRoutes from './src/api/ai.routes.ts';
 import uploadRoutes from './src/api/upload.routes.ts';
 import { db } from './src/config/firebase.ts';
+import { startCallState, endCallState, type CallType } from './src/services/callStateService.ts';
 
 const app = express();
 const port = process.env.PORT || 8000;
@@ -269,6 +270,11 @@ io.on('connection', (socket) => {
         name: user.name,
         profileImageUrl: user.profileImageUrl
       });
+      // Attach user id to socket for later auth in call events
+      // (lightweight authentication based on prior Firebase-authenticated HTTP flow)
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      socket.data.userId = user.uid;
       console.log(`✅ User registered: ${user.name} is on socket ${socket.id}`);
     }
   });
@@ -284,6 +290,148 @@ io.on('connection', (socket) => {
     // Sirf ussi group ke room mein naya message bhejo
     io.to(data.groupId).emit('newMessage', { message: data.message });
     console.log(`Broadcasting message to group: ${data.groupId}`);
+  });
+
+  // --- Unified Jitsi Calling: Socket.IO Signaling Events ---
+  // HYBRID ARCHITECTURE:
+  // - Jitsi handles ALL audio/video communication
+  // - Firebase stores ONLY minimal UI state (started/ended)
+  // - No signaling, media, ICE/SDP, or participant metadata in Firebase
+  
+  // start-call: caller initiates a private or group call
+  socket.on('start-call', async (data: {
+    targetId: string;
+    chatId?: string;
+    mediaType: 'audio' | 'video';
+    context?: 'dm' | 'group';
+  }) => {
+    // @ts-ignore
+    const callerId: string | undefined = socket.data.userId;
+    if (!callerId) {
+      console.warn('start-call: caller not registered on socket, ignoring');
+      return;
+    }
+
+    const callerInfo = onlineUsers.get(callerId);
+    const callerName = callerInfo?.name || 'Unknown';
+    // Note: callerAvatar is optional and may be undefined - only used for UI display, not Firebase
+
+    const { targetId, chatId, mediaType, context } = data;
+    if (!targetId || !mediaType) {
+      console.warn('start-call: missing targetId or mediaType');
+      return;
+    }
+
+    // Determine call type
+    const callType: 'private' | 'group' =
+      context === 'group' ? 'group' : 'private';
+
+    let roomName: string;
+    let firebaseCallType: CallType;
+    
+    if (callType === 'group') {
+      // Group calls: use groupId directly
+      const groupId = targetId;
+      roomName = `studyhive-group-${groupId}`;
+      firebaseCallType = 'group';
+    } else {
+      // One-to-one calls: use sorted user IDs to ensure both users join the same room
+      // Format: studyhive-direct-{userId1}-{userId2} where IDs are sorted alphabetically
+      const userIds = [callerId, targetId].sort();
+      roomName = `studyhive-direct-${userIds[0]}-${userIds[1]}`;
+      firebaseCallType = 'direct';
+    }
+
+    // Write minimal call state to Firebase (UI-only, Jitsi handles actual call)
+    await startCallState(roomName, firebaseCallType, callerId);
+
+    // Join caller to the call room
+    socket.join(roomName);
+    console.log(`📞 start-call: ${callerId} joined room ${roomName} (type=${callType}, media=${mediaType})`);
+
+    // Prepare payload for socket emission (UI display only)
+    const payload = {
+      roomName,
+      callType,
+      mediaType,
+      callerId,
+      callerName,
+      // Only include callerAvatar if it exists (optional UI field, not stored in Firebase)
+      callerAvatar: callerInfo?.profileImageUrl || undefined,
+      targetId,
+    };
+
+    if (callType === 'private') {
+      // Notify only the target user if online
+      const targetUser = onlineUsers.get(targetId);
+      if (!targetUser) {
+        console.warn(`start-call: target user ${targetId} is not online`);
+        return;
+      }
+      io.to(targetUser.socketId).emit('incoming-call', payload);
+      console.log(`📨 incoming-call (private) from ${callerId} to ${targetId}`);
+    } else {
+      // Group call: notify everyone in existing group room (groupId)
+      const groupId = targetId;
+      io.to(groupId).emit('incoming-call', payload);
+      console.log(`📨 incoming-call (group) from ${callerId} to group ${groupId}`);
+    }
+  });
+
+  // join-call: user accepts a call and joins the specific Jitsi room
+  socket.on('join-call', (data: {
+    roomName: string;
+    callType: 'private' | 'group';
+    mediaType: 'audio' | 'video';
+  }) => {
+    const { roomName, callType, mediaType } = data;
+    if (!roomName) {
+      console.warn('join-call: missing roomName');
+      return;
+    }
+
+    socket.join(roomName);
+    // Optionally notify others in the room that a participant joined
+    socket.to(roomName).emit('call-participant-joined', {
+      roomName,
+      callType,
+      mediaType,
+      // @ts-ignore
+      userId: socket.data.userId,
+    });
+    console.log(`👥 join-call: socket ${socket.id} joined ${roomName}`);
+  });
+
+  // end-call: user ends the call, notify everyone in the room
+  socket.on('end-call', async (data: {
+    roomName: string;
+    callType: 'private' | 'group';
+    mediaType: 'audio' | 'video';
+  }) => {
+    const { roomName, callType, mediaType } = data;
+    if (!roomName) {
+      console.warn('end-call: missing roomName');
+      return;
+    }
+
+    // @ts-ignore
+    const endedBy: string | undefined = socket.data.userId;
+    if (!endedBy) {
+      console.warn('end-call: user not registered on socket, ignoring');
+      return;
+    }
+
+    // Update Firebase call state (UI-only, Jitsi handles actual call termination)
+    await endCallState(roomName, endedBy);
+
+    console.log(`🛑 end-call: room ${roomName} (type=${callType}, media=${mediaType})`);
+    io.to(roomName).emit('call-ended', {
+      roomName,
+      callType,
+      mediaType,
+      endedBy,
+    });
+    // Sockets can leave the room on client side; server rooms will also clear on disconnect.
   });
 
   // Jab user disconnect hota hai
