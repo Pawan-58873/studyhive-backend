@@ -8,6 +8,10 @@ import { FieldValue } from 'firebase-admin/firestore';
 // Get current user profile
 export const getCurrentUser = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const userId = req.user!.uid;
         const userDoc = await db.collection('users').doc(userId).get();
         
@@ -36,6 +40,10 @@ export const getCurrentUser = async (req: Request, res: Response) => {
 // Update user profile
 export const updateUserProfile = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const userId = req.user!.uid;
         const { firstName, lastName, bio } = req.body;
         
@@ -113,8 +121,8 @@ export const updateUserProfile = async (req: Request, res: Response) => {
         res.status(200).json({
             message: 'Profile updated successfully.',
             user: {
-                id: updatedUserDoc.id,
-                ...userData
+                ...userData,
+                id: updatedUserDoc.id
             }
         });
     } catch (error: any) {
@@ -126,6 +134,10 @@ export const updateUserProfile = async (req: Request, res: Response) => {
 // Change password
 export const changePassword = async (req: Request, res: Response) => {
     try {
+        if (!db || !auth) {
+            return res.status(500).send({ error: 'Database or Auth not initialized.' });
+        }
+
         const userId = req.user!.uid;
         const { currentPassword, newPassword } = req.body;
         
@@ -195,6 +207,10 @@ export const changePassword = async (req: Request, res: Response) => {
 // Delete user account
 export const deleteAccount = async (req: Request, res: Response) => {
     try {
+        if (!db || !auth) {
+            return res.status(500).send({ error: 'Database or Auth not initialized.' });
+        }
+
         const userId = req.user!.uid;
         
         const userDocRef = db.collection('users').doc(userId);
@@ -225,6 +241,10 @@ export const deleteAccount = async (req: Request, res: Response) => {
 // Get user activity - Optimized for fast performance
 export const getUserActivity = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const userId = req.user!.uid;
         
         const activities: any[] = [];
@@ -263,10 +283,10 @@ export const getUserActivity = async (req: Request, res: Response) => {
             
             // Fetch all group and member docs in parallel for better performance
             const groupPromises = groupIds.map((groupId: string) => 
-                db.collection('groups').doc(groupId).get().catch(() => null)
+                db!.collection('groups').doc(groupId).get().catch(() => null)
             );
             const memberPromises = groupIds.map((groupId: string) => 
-                db.collection('groups').doc(groupId).collection('members').doc(userId).get().catch(() => null)
+                db!.collection('groups').doc(groupId).collection('members').doc(userId).get().catch(() => null)
             );
             
             const [groupDocs, memberDocs] = await Promise.all([
@@ -323,6 +343,10 @@ export const getUserActivity = async (req: Request, res: Response) => {
 // ... searchUsers function (no changes)
 export const searchUsers = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const { query } = req.query;
         const currentUserId = req.user!.uid;
 
@@ -367,6 +391,10 @@ export const searchUsers = async (req: Request, res: Response) => {
 // ... sendFriendRequest function (small change)
 export const sendFriendRequest = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const senderId = req.user!.uid;
         const { receiverId } = req.body;
 
@@ -401,6 +429,10 @@ export const sendFriendRequest = async (req: Request, res: Response) => {
 // ... getFriendRequests function (no changes)
 export const getFriendRequests = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const userId = req.user!.uid;
         const requestsSnapshot = await db.collection('users').doc(userId).collection('friendRequests').where('status', '==', 'pending').get();
         const requests = requestsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -415,6 +447,10 @@ export const getFriendRequests = async (req: Request, res: Response) => {
 // ... respondToFriendRequest function (small change)
 export const respondToFriendRequest = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const receiverId = req.user!.uid;
         const { senderId } = req.params;
         const { response } = req.body;

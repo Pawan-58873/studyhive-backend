@@ -6,6 +6,10 @@ import { FieldValue } from 'firebase-admin/firestore'; // --- NEW: Import FieldV
 
 export const getConversations = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const userId = req.user!.uid;
 
     const conversationsRef = db.collection('users').doc(userId).collection('conversations');
@@ -51,6 +55,10 @@ export const getConversations = async (req: Request, res: Response) => {
 // --- NEW: Function to mark a conversation as read ---
 export const markAsRead = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const { conversationId } = req.params;
     const userId = req.user!.uid;
 
@@ -72,6 +80,10 @@ export const markAsRead = async (req: Request, res: Response) => {
 // --- NEW: One-time sync to fix missing conversation entries ---
 export const syncConversations = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const userId = req.user!.uid;
 
     // Get user's groupIds

@@ -31,7 +31,12 @@ describe("session.controller - createSession", () => {
   it("creates a session successfully and returns 201", async () => {
     const add = vi.fn().mockResolvedValue({ id: "session1" });
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       add,
     });
 
@@ -54,7 +59,12 @@ describe("session.controller - createSession", () => {
   it("returns 400 on invalid payload (missing title)", async () => {
     const add = vi.fn();
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       add,
     });
 
@@ -98,9 +108,14 @@ describe("session.controller - getGroupSessions", () => {
 
     const get = vi.fn().mockResolvedValue({ empty: false, docs });
     const orderBy = vi.fn().mockReturnValue({ get });
-    const where = vi.fn().mockReturnValue({ where, orderBy });
+    const where = vi.fn().mockReturnValue({ orderBy, get });
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       where,
       orderBy,
       get,

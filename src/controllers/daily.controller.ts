@@ -13,6 +13,10 @@ const DAILY_API_BASE_URL = 'https://api.daily.co/v1';
  */
 export const getOrCreateDailyRoom = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const { groupId } = req.params;
     const userId = req.user!.uid;
 

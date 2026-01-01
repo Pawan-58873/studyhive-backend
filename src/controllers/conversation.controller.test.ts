@@ -48,7 +48,12 @@ describe("conversation.controller - getConversations", () => {
       },
     ];
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       doc: vi.fn().mockReturnValue({
         collection: vi.fn().mockReturnValue({
           get: vi.fn().mockResolvedValue({ docs }),
@@ -88,7 +93,12 @@ describe("conversation.controller - markAsRead", () => {
   it("updates unreadCount to 0 for a conversation", async () => {
     const update = vi.fn().mockResolvedValue(undefined);
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       doc: vi.fn().mockReturnValue({
         collection: vi.fn().mockReturnValue({
           doc: vi.fn().mockReturnValue({ update }),
@@ -110,7 +120,12 @@ describe("conversation.controller - markAsRead", () => {
   it("still returns 200 even if update fails (missing doc)", async () => {
     const update = vi.fn().mockRejectedValue(new Error("missing"));
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       doc: vi.fn().mockReturnValue({
         collection: vi.fn().mockReturnValue({
           doc: vi.fn().mockReturnValue({ update }),
@@ -148,7 +163,12 @@ describe("conversation.controller - syncConversations", () => {
     const batchSet = vi.fn();
     const batchCommit = vi.fn().mockResolvedValue(undefined);
 
-    (firebaseConfig.db.batch as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.batch as any).mockReturnValue({
       set: batchSet,
       commit: batchCommit,
     });
@@ -180,7 +200,12 @@ describe("conversation.controller - syncConversations", () => {
       }),
     };
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "users") {
         return {
           doc: vi.fn().mockReturnValue({

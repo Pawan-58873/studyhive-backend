@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 
 vi.mock('../config/firebase', () => ({
@@ -11,8 +11,8 @@ import { auth } from '../config/firebase';
 import { checkAuth } from './auth.middleware';
 
 type MockResponse = {
-  status: vi.Mock;
-  send: vi.Mock;
+  status: Mock;
+  send: Mock;
 };
 
 const createMockRes = (): MockResponse & Response => {
@@ -23,7 +23,12 @@ const createMockRes = (): MockResponse & Response => {
 };
 
 describe('checkAuth middleware', () => {
-  const verifyIdTokenMock = auth.verifyIdToken as unknown as vi.Mock;
+  // Use non-null assertion since auth is mocked in this test
+  if (!auth) {
+    throw new Error("Firebase auth is not initialized in test");
+  }
+
+  const verifyIdTokenMock = auth!.verifyIdToken as unknown as Mock;
 
   beforeEach(() => {
     verifyIdTokenMock.mockReset();

@@ -10,6 +10,10 @@ import { Timestamp } from 'firebase-admin/firestore';
  */
 export const createSession = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     // 1. Validate request body against Zod schema
     // NAYI LINE: Date string ko Date object me convert karna
     if (req.body.startTime) {
@@ -48,6 +52,10 @@ export const createSession = async (req: Request, res: Response) => {
  */
 export const getGroupSessions = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const { groupId, startDate, endDate } = req.query;
 
     // Start building the query on the 'sessions' collection
@@ -137,6 +145,10 @@ export const getGroupSessions = async (req: Request, res: Response) => {
  */
 export const updateSession = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const { sessionId } = req.params;
     const userId = req.user!.uid;
 
@@ -206,6 +218,10 @@ export const updateSession = async (req: Request, res: Response) => {
  */
 export const deleteSession = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const { sessionId } = req.params;
     const userId = req.user!.uid;
 

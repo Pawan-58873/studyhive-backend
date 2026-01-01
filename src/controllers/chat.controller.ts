@@ -12,6 +12,10 @@ const getChatId = (uid1: string, uid2: string) => {
 
 export const createOrGetChat = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const currentUserId = req.user!.uid;
     const { friendId } = req.body;
 
@@ -45,6 +49,10 @@ export const createOrGetChat = async (req: Request, res: Response) => {
 
 export const getChatMessages = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const { chatId } = req.params;
         const messagesSnapshot = await db.collection('chats').doc(chatId).collection('messages').orderBy('createdAt', 'asc').get();
         
@@ -77,6 +85,10 @@ export const getChatMessages = async (req: Request, res: Response) => {
 
 export const sendChatMessage = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const { chatId } = req.params;
         const senderId = req.user!.uid;
         const { content } = req.body;
@@ -152,6 +164,10 @@ export const sendChatMessage = async (req: Request, res: Response) => {
 // Add this new function to the end of the file
 export const logCallEvent = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const { chatId } = req.params; // Use chatId for one-on-one chats
         const { callerName, type, duration } = req.body;
 

@@ -84,6 +84,11 @@ describe("chat.controller - getChatMessages timestamp normalization", () => {
       },
     ];
 
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+    
     (firebaseConfig.db.collection as any).mockReturnValue({
       doc: vi.fn().mockReturnValue({
         collection: vi.fn().mockReturnValue({

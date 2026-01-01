@@ -9,6 +9,10 @@
 
     export const createGroup = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const creatorId = req.user!.uid;
         const groupData = insertGroupSchema.parse({ ...req.body, creatorId });
 
@@ -71,6 +75,10 @@
 
 export const sendGroupMessage = async (req: Request, res: Response) => {
   try {
+    if (!db) {
+      return res.status(500).send({ error: 'Database not initialized.' });
+    }
+
     const { groupId } = req.params;
     const senderId = req.user!.uid;
     const clientPayload = req.body;
@@ -106,7 +114,7 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     
     membersSnapshot.docs.forEach(memberDoc => {
       const memberId = memberDoc.id;
-      const conversationRef = db.collection('users').doc(memberId).collection('conversations').doc(groupId);
+      const conversationRef = db!.collection('users').doc(memberId).collection('conversations').doc(groupId);
       
       const lastMessageContent = `${senderName}: ${validatedData.content}`;
       const lastMessageForSelf = `You: ${validatedData.content}`;
@@ -153,6 +161,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
 
     export const addMemberToGroup = async (req: Request, res: Response) => {
         try {
+            if (!db) {
+                return res.status(500).send({ error: 'Database not initialized.' });
+            }
+
             const { groupId } = req.params;
             const { newUserEmail } = req.body;
             const requesterId = req.user!.uid;
@@ -211,6 +223,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
 
     export const getMyGroups = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const userId = req.user!.uid;
         const userDoc = await db.collection('users').doc(userId).get();
         if (!userDoc.exists) {
@@ -245,6 +261,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     };
     export const getGroupDetails = async (req: Request, res: Response) => {
         try {
+            if (!db) {
+                return res.status(500).send({ error: 'Database not initialized.' });
+            }
+
             const groupId = req.params.groupId;
             const groupDoc = await db.collection('groups').doc(groupId).get();
             if (!groupDoc.exists) {
@@ -267,6 +287,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     };
     export const getGroupMembers = async (req: Request, res: Response) => {
         try {
+            if (!db) {
+                return res.status(500).send({ error: 'Database not initialized.' });
+            }
+
             const groupId = req.params.groupId;
             const membersSnapshot = await db.collection('groups').doc(groupId).collection('members').get();
             const members = membersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -278,6 +302,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     };
     export const getGroupMessages = async (req: Request, res: Response) => {
         try {
+            if (!db) {
+                return res.status(500).send({ error: 'Database not initialized.' });
+            }
+
             const groupId = req.params.groupId;
             const messagesSnapshot = await db.collection('groups').doc(groupId).collection('messages').orderBy('createdAt', 'asc').get();
             const messages = messagesSnapshot.docs.map(doc => {
@@ -310,6 +338,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
         const userId = req.user!.uid;
         if (!inviteCode) { return res.status(400).send({ error: 'Invite code is required.' }); }
         try {
+            if (!db) {
+                return res.status(500).send({ error: 'Database not initialized.' });
+            }
+
             const groupsQuery = db.collection('groups').where('inviteCode', '==', inviteCode.toUpperCase()).limit(1);
             const querySnapshot = await groupsQuery.get();
             if (querySnapshot.empty) { return res.status(404).send({ error: 'Invalid invite code. Group not found.' }); }
@@ -344,6 +376,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     };
     export const updateMemberRole = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const { groupId, memberId } = req.params;
         const { role } = req.body;
         const requesterId = req.user!.uid;
@@ -361,6 +397,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     };
     export const removeMember = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const { groupId, memberId } = req.params;
         const requesterId = req.user!.uid;
         const requesterDoc = await db
@@ -395,6 +435,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
 
     export const logCallEvent = async (req: Request, res: Response) => {
         try {
+            if (!db) {
+                return res.status(500).send({ error: 'Database not initialized.' });
+            }
+
             const { groupId } = req.params;
             const { type, duration, temporaryCallId } = req.body;
 
@@ -458,6 +502,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     // --- NEW: Update Group Function ---
 export const updateGroup = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const groupId = req.params.groupId;
         const userId = req.user!.uid;
         const updateData = req.body;
@@ -484,6 +532,10 @@ export const updateGroup = async (req: Request, res: Response) => {
 // --- NEW: Delete Group Function ---
 export const deleteGroup = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const groupId = req.params.groupId;
         const userId = req.user!.uid;
 
@@ -502,7 +554,7 @@ export const deleteGroup = async (req: Request, res: Response) => {
         // Remove group from all members' conversations and groupIds
         membersSnapshot.docs.forEach(memberDoc => {
             const memberId = memberDoc.id;
-            const userRef = db.collection('users').doc(memberId);
+            const userRef = db!.collection('users').doc(memberId);
             const conversationRef = userRef.collection('conversations').doc(groupId);
             
             batch.update(userRef, { groupIds: FieldValue.arrayRemove(groupId) });
@@ -527,6 +579,10 @@ export const deleteGroup = async (req: Request, res: Response) => {
 // --- NEW: Leave Group Function ---
 export const leaveGroup = async (req: Request, res: Response) => {
     try {
+        if (!db) {
+            return res.status(500).send({ error: 'Database not initialized.' });
+        }
+
         const groupId = req.params.groupId;
         const userId = req.user!.uid;
 

@@ -43,7 +43,12 @@ describe("group.controller - createGroup", () => {
       get: vi.fn().mockResolvedValue({ exists: false }),
     };
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "users") {
         return {
           doc: vi.fn().mockReturnValue(userDocRef),
@@ -90,7 +95,12 @@ describe("group.controller - joinGroup", () => {
     const limit = vi.fn().mockReturnThis();
     const get = vi.fn().mockResolvedValue({ empty: true });
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "groups") {
         return { where, limit, get };
       }
@@ -141,7 +151,12 @@ describe("group.controller - leaveGroup", () => {
       }),
     };
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "groups") {
         return {
           doc: vi.fn().mockReturnValue({
@@ -188,7 +203,12 @@ describe("group.controller - deleteGroup", () => {
     const batchUpdate = vi.fn();
     const commit = vi.fn().mockResolvedValue(undefined);
 
-    (firebaseConfig.db.batch as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.batch as any).mockReturnValue({
       delete: batchDelete,
       update: batchUpdate,
       commit,
@@ -219,7 +239,12 @@ describe("group.controller - deleteGroup", () => {
       },
     };
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "groups") {
         return {
           doc: vi.fn().mockReturnValue(groupDocRef),

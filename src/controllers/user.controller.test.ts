@@ -35,7 +35,12 @@ describe("user.controller - getCurrentUser", () => {
       get: vi.fn().mockResolvedValue({ exists: false }),
     };
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       doc: vi.fn().mockReturnValue(docRef),
     });
 
@@ -67,7 +72,12 @@ describe("user.controller - getCurrentUser", () => {
       get: vi.fn().mockResolvedValue(userDoc),
     };
 
-    (firebaseConfig.db.collection as any).mockReturnValue({
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockReturnValue({
       doc: vi.fn().mockReturnValue(docRef),
     });
 
@@ -115,7 +125,12 @@ describe("user.controller - updateUserProfile", () => {
       }),
     });
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "users") {
         return {
           doc: vi.fn().mockReturnValue({ update, get }),
@@ -148,7 +163,12 @@ describe("user.controller - updateUserProfile", () => {
       }),
     });
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "users") {
         return {
           doc: vi.fn().mockReturnValue({ update, get }),
@@ -210,7 +230,12 @@ describe("user.controller - deleteAccount", () => {
 
     const usernamesDocDelete = vi.fn().mockResolvedValue(undefined);
 
-    (firebaseConfig.db.collection as any).mockImplementation((name: string) => {
+    // Use non-null assertion since db is mocked in this test
+    if (!firebaseConfig.db) {
+      throw new Error("Firebase db is not initialized in test");
+    }
+
+    (firebaseConfig.db!.collection as any).mockImplementation((name: string) => {
       if (name === "users") {
         return {
           doc: vi.fn().mockReturnValue(userDocRef),
