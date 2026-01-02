@@ -20,11 +20,28 @@ const upload = multer({
   },
 });
 
+// Middleware to handle both JSON and FormData requests
+// Multer only processes multipart/form-data, so JSON requests are handled by express.json()
+const handleSummarizeRequest = (req: any, res: any, next: any) => {
+  const contentType = req.headers['content-type'] || '';
+  
+  // If it's JSON, skip multer (express.json() already parsed it)
+  if (contentType.includes('application/json')) {
+    return next();
+  }
+  
+  // If it's FormData or other, use multer
+  return upload.fields([{ name: 'document', maxCount: 1 }])(req, res, next);
+};
+
 // Apply authentication middleware
 router.use(checkAuth);
 
 // POST /api/ai/summarize - Summarize text or uploaded document
-router.post('/summarize', upload.single('document'), summarizeContent);
+// Handles both JSON ({ text: "..." }) and FormData (text field or document file)
+// - JSON requests: parsed by express.json(), text in req.body.text
+// - FormData requests: parsed by multer, text in req.body.text, file in req.files
+router.post('/summarize', handleSummarizeRequest, summarizeContent);
 
 // POST /api/ai/generate-notes - Generate study notes from content
 router.post('/generate-notes', upload.single('document'), generateStudyNotes);
