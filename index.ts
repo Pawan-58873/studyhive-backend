@@ -3,6 +3,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
 // Get the directory name for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -10,9 +11,21 @@ const __dirname = path.dirname(__filename);
 
 // Load environment variables
 // For Render/Production: Environment variables are set directly in the platform
-// For local development: Load from .env file in server directory or parent directory
-dotenv.config({ path: path.resolve(__dirname, '.env') }); // Try server/.env first
-dotenv.config({ path: path.resolve(__dirname, '..', '.env') }); // Fallback to parent .env
+// For local development: Load from .env file - prioritize root directory, then server directory
+const rootEnvPath = path.resolve(__dirname, '..', '.env');
+const serverEnvPath = path.resolve(__dirname, '.env');
+
+// Try root directory .env first (most common location)
+if (existsSync(rootEnvPath)) {
+  dotenv.config({ path: rootEnvPath });
+  console.log(`📁 Loaded .env from root directory: ${rootEnvPath}`);
+} else if (existsSync(serverEnvPath)) {
+  // Fallback to server/.env if root .env doesn't exist
+  dotenv.config({ path: serverEnvPath });
+  console.log(`📁 Loaded .env from server directory: ${serverEnvPath}`);
+} else {
+  console.warn('⚠️  No .env file found in root or server directory');
+}
 
 // Log environment status (without exposing secrets)
 console.log("✅ Environment variables loaded!");
@@ -25,6 +38,11 @@ console.log("   - FIREBASE_PRIVATE_KEY:", process.env.FIREBASE_PRIVATE_KEY ? '�
 console.log("   - FIREBASE_STORAGE_BUCKET:", process.env.FIREBASE_STORAGE_BUCKET || 'Using default');
 console.log("   - LIVEBLOCKS_SECRET_KEY:", process.env.LIVEBLOCKS_SECRET_KEY ? '✓ Set' : '✗ Missing');
 console.log("   - CLOUDINARY_CLOUD_NAME:", process.env.CLOUDINARY_CLOUD_NAME ? '✓ Set' : '✗ Missing (File uploads disabled)');
+// ⚠️ FOR TESTING ONLY: Log the Gemini API key (remove in production!)
+console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? `✓ Set (${process.env.GEMINI_API_KEY.substring(0, 8)}...${process.env.GEMINI_API_KEY.substring(process.env.GEMINI_API_KEY.length - 4)})` : '✗ Missing');
+if (process.env.GEMINI_API_KEY) {
+  console.log("   ⚠️  Full GEMINI_API_KEY (FOR TESTING ONLY - Remove in production!):", process.env.GEMINI_API_KEY);
+}
 console.log("   - CLOUDINARY_API_KEY:", process.env.CLOUDINARY_API_KEY ? '✓ Set' : '✗ Missing (File uploads disabled)');
 console.log("   - CLOUDINARY_API_SECRET:", process.env.CLOUDINARY_API_SECRET ? '✓ Set' : '✗ Missing (File uploads disabled)');
 console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? '✓ Set' : '✗ Missing (AI features disabled)');
@@ -57,25 +75,41 @@ const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const isProduction = process.env.NODE_ENV === 'production';
 
 // ============================================
-// CORS Configuration - Dynamic Origin Handling
+// CORS Configuration - Production-Ready Origin Handling
 // ============================================
-// In development: Allow localhost
-// In production: Allow only specified origins from environment
+// In development: Allow localhost origins for local testing
+// In production: Allow ONLY the frontend URL (https://studyhive-frontend-ten.vercel.app)
+// 
+// IMPORTANT FOR DEPLOYMENT:
+// - Set CLIENT_ORIGIN environment variable in Render to: https://studyhive-frontend-ten.vercel.app
+// - This ensures only your frontend can make requests to the backend
+// - Prevents unauthorized cross-origin requests
 
 const allowedOrigins: string[] = [];
 
 if (isProduction) {
   // Production: Only allow explicitly configured origins
+  // Default frontend URL for StudyHive deployment
+  const frontendUrl = 'https://studyhive-frontend-ten.vercel.app';
+  
+  // Add the frontend URL from environment variable or use default
   if (clientOrigin) {
-    allowedOrigins.push(clientOrigin);
+    // Support comma-separated list of origins
+    if (clientOrigin.includes(',')) {
+      allowedOrigins.push(...clientOrigin.split(',').map(origin => origin.trim()));
+    } else {
+      allowedOrigins.push(clientOrigin);
+    }
   }
-  // Add any additional production origins from CLIENT_ORIGIN env var
-  // Format: CLIENT_ORIGIN=https://app1.com,https://app2.com
-  if (clientOrigin && clientOrigin.includes(',')) {
-    allowedOrigins.push(...clientOrigin.split(',').map(origin => origin.trim()));
+  
+  // Always add the default frontend URL if not already present
+  if (!allowedOrigins.includes(frontendUrl)) {
+    allowedOrigins.push(frontendUrl);
   }
+  
+  console.log('🔒 Production CORS: Allowing origins:', allowedOrigins);
 } else {
-  // Development: Allow localhost with different ports
+  // Development: Allow localhost with different ports for local testing
   allowedOrigins.push(
     'http://localhost:5173',
     'http://localhost:5174',
@@ -85,7 +119,7 @@ if (isProduction) {
     'http://127.0.0.1:4173'
   );
   
-  // Also add custom CLIENT_ORIGIN in development
+  // Also add custom CLIENT_ORIGIN in development if specified
   if (clientOrigin && !allowedOrigins.includes(clientOrigin)) {
     allowedOrigins.push(clientOrigin);
   }
@@ -95,13 +129,31 @@ if (isProduction) {
 app.set('trust proxy', 1);
 
 // ============================================
-// CORS Middleware - Dynamic Origin Validation
+// CORS Middleware - Production-Ready Origin Validation
 // ============================================
+// This middleware validates that requests come from allowed origins only.
+// 
+// SECURITY NOTES:
+// - In production: Only allows requests from the frontend URL
+// - In development: Allows localhost origins for testing
+// - Credentials are enabled to support cookies and auth headers
+// - Preflight requests (OPTIONS) are handled automatically
+//
+// IMPORTANT: In production, requests without origin are BLOCKED for security.
+// Only allow no-origin requests in development (for tools like Postman).
+
 const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
+    // In production: Block requests with no origin (security best practice)
+    // In development: Allow no-origin requests (for testing tools like Postman)
     if (!origin) {
-      return callback(null, true);
+      if (isProduction) {
+        console.warn('🚫 CORS blocked: Request with no origin (not allowed in production)');
+        return callback(new Error('CORS: Origin header required in production'));
+      } else {
+        // Development: Allow no-origin requests for testing
+        return callback(null, true);
+      }
     }
     
     // Check if origin is in allowed list
@@ -113,18 +165,30 @@ const corsOptions = {
       callback(new Error(`Origin ${origin} not allowed by CORS`));
     }
   },
+  // Allow all necessary HTTP methods including OPTIONS for preflight
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  // Enable credentials to support cookies and Authorization headers
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  // Allow necessary headers for API requests
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  // Expose headers that the frontend might need to read
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  // Set max age for preflight cache (24 hours)
+  maxAge: 86400,
 };
 
 console.log('🔒 CORS configured for environment:', isProduction ? 'PRODUCTION' : 'DEVELOPMENT');
 console.log('🔒 Allowed origins:', allowedOrigins);
 
-// Handle preflight requests explicitly
+// ============================================
+// Preflight Request Handling
+// ============================================
+// Handle OPTIONS preflight requests explicitly before other middleware
+// This ensures browsers can check CORS permissions before sending actual requests
 app.options('*', cors(corsOptions));
 
-// Apply CORS middleware
+// Apply CORS middleware to all routes
+// This adds CORS headers to all responses
 app.use(cors(corsOptions));
 
 // ============================================
@@ -299,26 +363,69 @@ app.use('/api/upload', uploadRoutes); // Upload routes for Cloudinary
 const server = http.createServer(app);
 
 // ============================================
-// Socket.IO Configuration with Dynamic CORS
+// Socket.IO Configuration - Production-Ready WebSocket Setup
 // ============================================
+// Socket.IO handles WebSocket connections for real-time features (chat, notifications, etc.)
+//
+// CORS CONFIGURATION:
+// - In production: Only allows connections from the frontend URL
+// - In development: Allows localhost origins for testing
+// - Credentials enabled to support authentication
+//
+// TRANSPORT CONFIGURATION:
+// - Uses WebSocket (WSS in production) as primary transport
+// - Falls back to polling if WebSocket is unavailable
+// - In production, ensures secure WebSocket connections (WSS)
+//
+// CONNECTION SETTINGS:
+// - pingTimeout: Time to wait for pong response (60s)
+// - pingInterval: How often to ping clients (25s)
+// - These settings ensure reliable connections in production
+
 export const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      // Allow requests with no origin or from allowed origins
-      if (!origin || allowedOrigins.includes(origin)) {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      // In production: Block connections with no origin (security best practice)
+      // In development: Allow no-origin connections (for testing)
+      if (!origin) {
+        if (isProduction) {
+          console.warn('🚫 Socket.IO CORS blocked: Connection with no origin (not allowed in production)');
+          return callback(new Error('Socket.IO CORS: Origin header required in production'));
+        } else {
+          // Development: Allow no-origin connections for testing
+          return callback(null, true);
+        }
+      }
+      
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.warn(`🚫 Socket.IO CORS blocked: ${origin}`);
-        callback(new Error('Not allowed by CORS'));
+        console.warn(`🚫 Socket.IO CORS blocked connection from origin: ${origin}`);
+        console.warn(`   Allowed origins: ${allowedOrigins.join(', ')}`);
+        callback(new Error('Socket.IO: Origin not allowed by CORS'));
       }
     },
+    // Allow necessary HTTP methods for Socket.IO handshake
     methods: ['GET', 'POST'],
+    // Enable credentials to support authentication cookies/headers
     credentials: true,
+    // Allow necessary headers for Socket.IO
+    allowedHeaders: ['Content-Type', 'Authorization'],
   },
-  // Production-ready Socket.IO settings
+  // Transport configuration: WebSocket first, polling as fallback
+  // In production, WebSocket will automatically use WSS (secure WebSocket)
   transports: ['websocket', 'polling'],
-  pingTimeout: 60000,
-  pingInterval: 25000,
+  // Connection reliability settings for production
+  pingTimeout: 60000, // 60 seconds - wait for pong response
+  pingInterval: 25000, // 25 seconds - ping clients every 25s
+  // Additional production settings
+  allowEIO3: false, // Disable Engine.IO v3 compatibility (use v4 only)
+  // Enable CORS for Socket.IO handshake
+  allowRequest: (req, callback) => {
+    // Additional validation can be added here if needed
+    callback(null, true);
+  },
 });
 
 // Yeh map online users ko track karne ke liye hai
