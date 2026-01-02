@@ -88,17 +88,9 @@ try {
       console.log('✅ Firebase Admin initialized with environment variables');
       console.log('📋 Firebase Project ID:', projectId);
       console.log('📧 Firebase Client Email:', clientEmail);
-      console.log('📦 Storage Bucket:', bucketName);
+      console.log('📦 Storage Bucket (for Admin SDK compatibility):', bucketName);
       console.log('🔐 Token verification should now work on Render!');
-      
-      // Verify bucket is accessible
-      try {
-        const bucket = admin.storage().bucket(bucketName);
-        console.log('✅ Storage bucket initialized successfully');
-      } catch (bucketError: any) {
-        console.warn('⚠️  Warning: Could not verify storage bucket:', bucketError.message);
-        console.warn('   This might be normal if the bucket needs to be created in Firebase Console');
-      }
+      console.log('ℹ️  Note: File storage uses Cloudinary, not Firebase Storage');
     } else {
       // Log which env vars are missing
       console.log('🔍 Environment variable check:');
@@ -121,17 +113,8 @@ try {
       });
       console.log('✅ Firebase initialized with serviceAccountKey.json');
       console.log('📋 Firebase Project ID:', serviceAccount.project_id);
-      console.log('📦 Storage Bucket:', bucketName);
-      console.log('📦 Storage Bucket URL: gs://' + bucketName);
-      
-      // Verify bucket is accessible
-      try {
-        const bucket = admin.storage().bucket(bucketName);
-        console.log('✅ Storage bucket initialized successfully');
-      } catch (bucketError: any) {
-        console.warn('⚠️  Warning: Could not verify storage bucket:', bucketError.message);
-        console.warn('   This might be normal if the bucket needs to be created in Firebase Console');
-      }
+      console.log('📦 Storage Bucket (for Admin SDK compatibility):', bucketName);
+      console.log('ℹ️  Note: File storage uses Cloudinary, not Firebase Storage');
     }
     firebaseInitialized = true;
   } else {

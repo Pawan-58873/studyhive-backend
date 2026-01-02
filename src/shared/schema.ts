@@ -148,7 +148,7 @@ export const insertMessageSchema = z.object({
   content: z.string().min(1),
   senderId: z.string(),
   senderName: z.string(),
-  senderProfileImageUrl: z.string().url().optional(),
+  senderProfileImageUrl: z.union([z.string().url(), z.literal('')]).optional(),
 
   // --- CHANGE START: ADDED FOR CALL LOGS ---
   type: z.enum(['text', 'file', 'call-log']).optional(),

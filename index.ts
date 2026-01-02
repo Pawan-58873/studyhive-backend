@@ -24,6 +24,9 @@ console.log("   - FIREBASE_CLIENT_EMAIL:", process.env.FIREBASE_CLIENT_EMAIL ? '
 console.log("   - FIREBASE_PRIVATE_KEY:", process.env.FIREBASE_PRIVATE_KEY ? '✓ Set' : '✗ Missing');
 console.log("   - FIREBASE_STORAGE_BUCKET:", process.env.FIREBASE_STORAGE_BUCKET || 'Using default');
 console.log("   - LIVEBLOCKS_SECRET_KEY:", process.env.LIVEBLOCKS_SECRET_KEY ? '✓ Set' : '✗ Missing');
+console.log("   - CLOUDINARY_CLOUD_NAME:", process.env.CLOUDINARY_CLOUD_NAME ? '✓ Set' : '✗ Missing (File uploads disabled)');
+console.log("   - CLOUDINARY_API_KEY:", process.env.CLOUDINARY_API_KEY ? '✓ Set' : '✗ Missing (File uploads disabled)');
+console.log("   - CLOUDINARY_API_SECRET:", process.env.CLOUDINARY_API_SECRET ? '✓ Set' : '✗ Missing (File uploads disabled)');
 console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? '✓ Set' : '✗ Missing (AI features disabled)');
 console.log("   - DAILY_API_KEY:", process.env.DAILY_API_KEY ? '✓ Set' : '✗ Missing (Video calling disabled)');
 
@@ -51,32 +54,72 @@ import { db } from './src/config/firebase.ts';
 const app = express();
 const port = process.env.PORT || 8000;
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+const isProduction = process.env.NODE_ENV === 'production';
 
-// Allowed origins for CORS (localhost for dev, Vercel for production)
-const allowedOrigins = [
-  'http://localhost:5173',
-  'https://studyhive-frontend-ten.vercel.app', // ✅ Updated to correct Vercel URL
-  'https://studyhive-frontend-hgah.vercel.app' // Keep old one for backward compatibility
-];
+// ============================================
+// CORS Configuration - Dynamic Origin Handling
+// ============================================
+// In development: Allow localhost
+// In production: Allow only specified origins from environment
 
-// Add custom CLIENT_ORIGIN from env if set and not already in list
-if (clientOrigin && !allowedOrigins.includes(clientOrigin)) {
-  allowedOrigins.push(clientOrigin);
+const allowedOrigins: string[] = [];
+
+if (isProduction) {
+  // Production: Only allow explicitly configured origins
+  if (clientOrigin) {
+    allowedOrigins.push(clientOrigin);
+  }
+  // Add any additional production origins from CLIENT_ORIGIN env var
+  // Format: CLIENT_ORIGIN=https://app1.com,https://app2.com
+  if (clientOrigin && clientOrigin.includes(',')) {
+    allowedOrigins.push(...clientOrigin.split(',').map(origin => origin.trim()));
+  }
+} else {
+  // Development: Allow localhost with different ports
+  allowedOrigins.push(
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:4173', // Vite preview
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+    'http://127.0.0.1:4173'
+  );
+  
+  // Also add custom CLIENT_ORIGIN in development
+  if (clientOrigin && !allowedOrigins.includes(clientOrigin)) {
+    allowedOrigins.push(clientOrigin);
+  }
 }
 
-// Trust proxy for Render deployment (required for secure cookies behind proxy)
+// Trust proxy for deployment behind reverse proxy (Render, Railway, etc.)
 app.set('trust proxy', 1);
 
-// CORS configuration - must be BEFORE all routes
+// ============================================
+// CORS Middleware - Dynamic Origin Validation
+// ============================================
 const corsOptions = {
-  origin: allowedOrigins,
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`🚫 CORS blocked request from origin: ${origin}`);
+      console.warn(`   Allowed origins: ${allowedOrigins.join(', ')}`);
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
-console.log('🔒 CORS configured for origin:', clientOrigin);
-console.log('🔒 CORS allowed origins:', allowedOrigins);
+console.log('🔒 CORS configured for environment:', isProduction ? 'PRODUCTION' : 'DEVELOPMENT');
+console.log('🔒 Allowed origins:', allowedOrigins);
 
 // Handle preflight requests explicitly
 app.options('*', cors(corsOptions));
@@ -84,20 +127,27 @@ app.options('*', cors(corsOptions));
 // Apply CORS middleware
 app.use(cors(corsOptions));
 
-// Session configuration for cross-origin requests (Vercel <-> Render)
+// ============================================
+// Session Configuration - Environment Aware
+// ============================================
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'studyhive-session-secret-key',
+  secret: process.env.SESSION_SECRET || 'studyhive-session-secret-key-' + Date.now(),
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // true in production (HTTPS)
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for cross-origin in production
+    secure: isProduction, // true in production (HTTPS only)
+    sameSite: isProduction ? 'none' : 'lax', // 'none' for cross-origin in production
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    domain: isProduction ? undefined : undefined, // Let browser handle domain
   },
 }));
 
-console.log('🍪 Session configured with sameSite:', process.env.NODE_ENV === 'production' ? 'none' : 'lax');
+console.log('🍪 Session configured:', {
+  secure: isProduction,
+  sameSite: isProduction ? 'none' : 'lax',
+  environment: isProduction ? 'production' : 'development'
+});
 
 app.use(express.json({ limit: '50mb' })); // Increase payload limit
 app.use(express.urlencoded({ extended: true, limit: '50mb' })); // For form data
@@ -248,12 +298,27 @@ app.use('/api/upload', uploadRoutes); // Upload routes for Cloudinary
 
 const server = http.createServer(app);
 
+// ============================================
+// Socket.IO Configuration with Dynamic CORS
+// ============================================
 export const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      // Allow requests with no origin or from allowed origins
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`🚫 Socket.IO CORS blocked: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     methods: ['GET', 'POST'],
     credentials: true,
   },
+  // Production-ready Socket.IO settings
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
 });
 
 // Yeh map online users ko track karne ke liye hai

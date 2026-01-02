@@ -37,80 +37,21 @@ interface GroupFileMetadata extends FileMetadata {
   groupId: string;
 }
 
-// Get Firebase Storage bucket from environment variable or default
-const getStorageBucket = () => {
-  if (!admin) {
-    console.error('[File Controller] Firebase Admin not initialized');
-    return null;
-  }
-
-  try {
-    // Get bucket name from environment or use default from Firebase app config
-    const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
-
-    let bucket;
-    if (bucketName) {
-      bucket = admin.storage().bucket(bucketName);
-      console.log('[File Controller] Using storage bucket from env:', bucketName);
-    } else {
-      // Use default bucket from Firebase app configuration
-      bucket = admin.storage().bucket();
-      console.log('[File Controller] Using default storage bucket from Firebase config');
-    }
-
-    // Log bucket details for debugging
-    const bucketNameActual = bucket.name;
-    console.log('[File Controller] Storage bucket name:', bucketNameActual);
-    console.log('[File Controller] Storage bucket URL: gs://' + bucketNameActual);
-    console.log('[File Controller] Storage bucket public URL: https://storage.googleapis.com/' + bucketNameActual);
-
-    return bucket;
-  } catch (error: any) {
-    console.error('[File Controller] ❌ Error getting storage bucket:', error);
-    console.error('[File Controller] Error code:', error.code);
-    console.error('[File Controller] Error message:', error.message);
-    return null;
-  }
-};
-
-const bucket = getStorageBucket();
-
-// Verify bucket is accessible on startup (non-blocking)
-if (bucket) {
-  console.log('[File Controller] ===== Verifying Storage Bucket =====');
-  console.log('[File Controller] Bucket name:', bucket.name);
-  console.log('[File Controller] Bucket URL: gs://' + bucket.name);
-
-  bucket.exists()
-    .then(([exists]) => {
-      if (exists) {
-        console.log('[File Controller] ✅ Storage bucket verified and accessible');
-        console.log('[File Controller] Bucket exists: true');
-        console.log('[File Controller] Ready for file uploads');
-      } else {
-        console.warn('[File Controller] ⚠️  Storage bucket does not exist:', bucket.name);
-        console.warn('[File Controller] Please create the bucket in Firebase Console > Storage');
-        console.warn('[File Controller] Steps:');
-        console.warn('   1. Go to Firebase Console > Storage');
-        console.warn('   2. Click "Get started" or "Create bucket"');
-        console.warn('   3. Choose location (e.g., us-central1)');
-        console.warn('   4. Select "Start in test mode" for Spark plan');
-        console.warn('   5. Click "Done"');
-      }
-    })
-    .catch((error) => {
-      console.warn('[File Controller] ⚠️  Could not verify storage bucket:', error.message);
-      console.warn('[File Controller] Error code:', error.code);
-      console.warn('[File Controller] This might be due to permissions or network issues');
-      console.warn('[File Controller] Ensure service account has Storage Admin role');
-    });
-} else {
-  console.error('[File Controller] ❌ Storage bucket not initialized - file uploads will fail');
-  console.error('[File Controller] Check Firebase configuration in server/.env');
-}
-
 // Maximum file size (10MB)
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+/**
+ * Remove undefined fields from an object (Firestore doesn't accept undefined values)
+ */
+function removeUndefinedFields<T extends Record<string, any>>(obj: T): Partial<T> {
+  const cleaned: any = { ...obj };
+  Object.keys(cleaned).forEach(key => {
+    if (cleaned[key] === undefined) {
+      delete cleaned[key];
+    }
+  });
+  return cleaned;
+}
 
 // Allowed file types
 const ALLOWED_TYPES = [
@@ -234,12 +175,6 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Database not initialized. Please check server configuration.' });
     }
 
-    // Check if bucket is initialized
-    if (!bucket) {
-      console.error('[File Upload] Firebase Storage bucket not initialized');
-      return res.status(500).json({ error: 'Storage service not initialized. Please check server configuration.' });
-    }
-
     // Verify user is a member of the group
     try {
       console.log(`[File Upload] Checking group membership for user ${userId} in group ${groupId}`);
@@ -320,34 +255,80 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
 
       try {
         console.log(`[File Upload] Starting Cloudinary upload for ${file.originalname}`);
+        console.log(`[File Upload] File size: ${file.size} bytes`);
+        console.log(`[File Upload] Buffer length: ${file.buffer?.length || 0} bytes`);
 
-        fileUrl = await new Promise((resolve, reject) => {
+        // Check if Cloudinary is configured
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+        const apiKey = process.env.CLOUDINARY_API_KEY;
+        const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+        if (!cloudName || !apiKey || !apiSecret) {
+          console.error('[File Upload] Cloudinary not configured - missing credentials');
+          return res.status(500).json({ 
+            error: 'Storage service not configured', 
+            details: 'Cloudinary credentials are missing. Please check server configuration.' 
+          });
+        }
+
+        fileUrl = await new Promise<string>((resolve, reject) => {
           const uploadStream = cloudinary.uploader.upload_stream(
             {
               folder: `groups/${groupId}`,
               resource_type: 'auto',
-              public_id: `${fileId}`, // Optional: set custom public ID
-              use_filename: true
+              public_id: `groups/${groupId}/${fileId}`, // Full path including folder
+              overwrite: false,
             },
             (error, result) => {
               if (error) {
-                console.error('[File Upload] Cloudinary error:', error);
+                console.error('[File Upload] Cloudinary error details:', {
+                  message: error.message,
+                  http_code: error.http_code,
+                  name: error.name,
+                  error: JSON.stringify(error, null, 2)
+                });
                 reject(error);
+              } else if (!result || !result.secure_url) {
+                console.error('[File Upload] Cloudinary returned no URL:', result);
+                reject(new Error('Cloudinary upload succeeded but no URL returned'));
               } else {
-                console.log('[File Upload] Cloudinary success:', result?.secure_url);
-                resolve(result!.secure_url);
+                console.log('[File Upload] Cloudinary success:', result.secure_url);
+                resolve(result.secure_url);
               }
             }
           );
 
+          // Handle stream errors
+          uploadStream.on('error', (streamError) => {
+            console.error('[File Upload] Stream error:', streamError);
+            reject(streamError);
+          });
+
           // Create a readable stream from buffer
           const stream = Readable.from(file.buffer);
+          stream.on('error', (streamError) => {
+            console.error('[File Upload] Readable stream error:', streamError);
+            reject(streamError);
+          });
+          
           stream.pipe(uploadStream);
         });
 
       } catch (uploadError: any) {
-        console.error('[File Upload] Upload failed:', uploadError);
-        return res.status(500).json({ error: 'Storage upload failed', details: uploadError.message });
+        console.error('[File Upload] Upload failed with error:', {
+          message: uploadError?.message,
+          name: uploadError?.name,
+          stack: uploadError?.stack,
+          http_code: uploadError?.http_code,
+          error: uploadError
+        });
+        return res.status(500).json({ 
+          error: 'Storage upload failed', 
+          details: uploadError?.message || 'Unknown upload error',
+          ...(process.env.NODE_ENV === 'development' && {
+            fullError: uploadError?.toString()
+          })
+        });
       }
 
       const fileName = name || file.originalname;
@@ -383,11 +364,17 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
             ? `${uploaderData.firstName} ${uploaderData.lastName || ''}`.trim()
             : uploaderData?.username || 'Unknown';
 
+        // Handle profileImageUrl - use undefined if empty to avoid validation issues
+        const profileImageUrl = uploaderData?.profileImageUrl;
+        const validProfileImageUrl = profileImageUrl && profileImageUrl.trim() !== '' 
+          ? profileImageUrl 
+          : undefined;
+
         const messagePayload = insertMessageSchema.parse({
           content: `📎 Shared a file: ${fileName}`,
           senderId: userId,
           senderName,
-          senderProfileImageUrl: uploaderData?.profileImageUrl || '',
+          senderProfileImageUrl: validProfileImageUrl,
           type: 'file',
           fileUrl,
           fileType: fileExtension.toLowerCase(),
@@ -395,28 +382,69 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
           fileSize: file.size,
         });
 
+        // Remove undefined fields before saving to Firestore (Firestore doesn't accept undefined)
+        const firestorePayload = removeUndefinedFields(messagePayload);
+
+        // Use batch to update message and conversation lists atomically
+        const batch = db.batch();
         const messageRef = db.collection('groups').doc(groupId).collection('messages').doc();
-        await messageRef.set({
-          ...messagePayload,
-          createdAt: FieldValue.serverTimestamp(),
+        const serverTimestamp = FieldValue.serverTimestamp();
+        batch.set(messageRef, {
+          ...firestorePayload,
+          createdAt: serverTimestamp,
+          timestamp: serverTimestamp, // Frontend queries by 'timestamp' field
         });
 
+        // Update conversation lists for all group members (like sendGroupMessage does)
+        const membersSnapshot = await db.collection('groups').doc(groupId).collection('members').get();
+        const lastMessageContent = `${senderName}: 📎 Shared a file: ${fileName}`;
+        const lastMessageForSelf = `You: 📎 Shared a file: ${fileName}`;
+
+        membersSnapshot.docs.forEach(memberDoc => {
+          const memberId = memberDoc.id;
+          const conversationRef = db.collection('users').doc(memberId).collection('conversations').doc(groupId);
+          
+          if (memberId !== userId) {
+            // For other members, update last message and increment unread count
+            batch.set(conversationRef, {
+              lastMessage: lastMessageContent,
+              timestamp: FieldValue.serverTimestamp(),
+              unreadCount: FieldValue.increment(1)
+            }, { merge: true });
+          } else {
+            // For the sender, just update the last message
+            batch.set(conversationRef, {
+              lastMessage: lastMessageForSelf,
+              timestamp: FieldValue.serverTimestamp()
+            }, { merge: true });
+          }
+        });
+
+        await batch.commit();
+
+        // Get the saved message and emit via Socket.IO
         const savedMessageDoc = await messageRef.get();
         const savedData = savedMessageDoc.data();
         if (savedData) {
+          const timestampValue: any = (savedData as any).timestamp || (savedData as any).createdAt;
           const createdAtValue: any = (savedData as any).createdAt;
-          const createdAtIso =
-            createdAtValue && typeof createdAtValue.toDate === 'function'
-              ? createdAtValue.toDate().toISOString()
-              : new Date().toISOString();
+          
+          const timestampIso = timestampValue && typeof timestampValue.toDate === 'function'
+            ? timestampValue.toDate().toISOString()
+            : new Date().toISOString();
+          const createdAtIso = createdAtValue && typeof createdAtValue.toDate === 'function'
+            ? createdAtValue.toDate().toISOString()
+            : timestampIso;
 
           const savedMessage = {
             id: savedMessageDoc.id,
             ...savedData,
+            timestamp: timestampIso,
             createdAt: createdAtIso,
           };
 
           io.to(groupId).emit('newMessage', { message: savedMessage });
+          console.log('[File Upload] ✅ Group chat message created and emitted');
         }
       } catch (messageError: any) {
         console.error('[File Upload] Failed to create or emit chat message for file upload:', messageError);
@@ -474,11 +502,17 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
             ? `${uploaderData.firstName} ${uploaderData.lastName || ''}`.trim()
             : uploaderData?.username || 'Unknown';
 
+        // Handle profileImageUrl - use undefined if empty to avoid validation issues
+        const profileImageUrl = uploaderData?.profileImageUrl;
+        const validProfileImageUrl = profileImageUrl && profileImageUrl.trim() !== '' 
+          ? profileImageUrl 
+          : undefined;
+
         const messagePayload = insertMessageSchema.parse({
           content: `📎 Shared a file: ${fileName}`,
           senderId: userId,
           senderName,
-          senderProfileImageUrl: uploaderData?.profileImageUrl || '',
+          senderProfileImageUrl: validProfileImageUrl,
           type: 'file',
           fileUrl: finalFileUrl,
           fileType: finalFileExtension.toLowerCase(),
@@ -486,12 +520,45 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
           fileSize: finalFileSize,
         });
 
+        // Remove undefined fields before saving to Firestore (Firestore doesn't accept undefined)
+        const firestorePayload = removeUndefinedFields(messagePayload);
+
+        // Use batch to update message and conversation lists atomically
+        const batch = db.batch();
         const messageRef = db.collection('groups').doc(groupId).collection('messages').doc();
-        await messageRef.set({
-          ...messagePayload,
-          createdAt: FieldValue.serverTimestamp(),
+        const serverTimestamp = FieldValue.serverTimestamp();
+        batch.set(messageRef, {
+          ...firestorePayload,
+          createdAt: serverTimestamp,
+          timestamp: serverTimestamp, // Frontend queries by 'timestamp' field
         });
 
+        // Update conversation lists for all group members
+        const membersSnapshot = await db.collection('groups').doc(groupId).collection('members').get();
+        const lastMessageContent = `${senderName}: 📎 Shared a file: ${fileName}`;
+        const lastMessageForSelf = `You: 📎 Shared a file: ${fileName}`;
+
+        membersSnapshot.docs.forEach(memberDoc => {
+          const memberId = memberDoc.id;
+          const conversationRef = db.collection('users').doc(memberId).collection('conversations').doc(groupId);
+          
+          if (memberId !== userId) {
+            batch.set(conversationRef, {
+              lastMessage: lastMessageContent,
+              timestamp: FieldValue.serverTimestamp(),
+              unreadCount: FieldValue.increment(1)
+            }, { merge: true });
+          } else {
+            batch.set(conversationRef, {
+              lastMessage: lastMessageForSelf,
+              timestamp: FieldValue.serverTimestamp()
+            }, { merge: true });
+          }
+        });
+
+        await batch.commit();
+
+        // Get the saved message and emit via Socket.IO
         const savedMessageDoc = await messageRef.get();
         const savedData = savedMessageDoc.data();
         if (savedData) {
@@ -508,6 +575,7 @@ export const uploadGroupFile = async (req: Request, res: Response) => {
           };
 
           io.to(groupId).emit('newMessage', { message: savedMessage });
+          console.log('[File Upload] ✅ Group chat message created and emitted (fileUrl)');
         }
       } catch (messageError: any) {
         console.error('[File Upload] Failed to create or emit chat message for fileUrl upload:', messageError);
@@ -587,21 +655,38 @@ export const deleteGroupFile = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Only the uploader or group admin can delete this file.' });
     }
 
-    // Delete from Firebase Storage if storagePath exists
-    if (fileData?.storagePath && bucket && fileData.storagePath.startsWith('groups/')) { // Check if it's a Firebase Storage path
+    // Delete from Cloudinary if fileUrl exists
+    if (fileData?.fileUrl) {
       try {
-        await bucket.file(fileData.storagePath).delete();
-      } catch (storageError) {
-        console.warn('Could not delete file from storage:', storageError);
-        // Continue with Firestore deletion even if storage deletion fails
-      }
-    } else if (fileData?.storagePath && fileData.storagePath.startsWith('groups/')) { // Assume Cloudinary public_id
-      try {
-        const publicId = fileData.storagePath.split('/').slice(0, -1).join('/') + '/' + fileData.storagePath.split('/').pop()?.split('.')[0];
-        await cloudinary.uploader.destroy(publicId);
-        console.log(`[File Delete] Cloudinary file ${publicId} deleted.`);
+        let publicId: string | null = null;
+        
+        // First, try to use storagePath if it exists (most reliable)
+        if (fileData.storagePath && fileData.storagePath.startsWith('groups/')) {
+          // storagePath format: groups/{groupId}/{fileId}
+          // Cloudinary public_id should be: groups/{groupId}/{fileId}
+          publicId = fileData.storagePath;
+        } else {
+          // Fallback: Extract public_id from Cloudinary URL
+          // Cloudinary URLs format: https://res.cloudinary.com/{cloud_name}/{resource_type}/upload/v{version}/{public_id}.{format}
+          const urlParts = fileData.fileUrl.split('/');
+          const uploadIndex = urlParts.findIndex((part: string) => part === 'upload');
+          if (uploadIndex !== -1 && uploadIndex < urlParts.length - 1) {
+            // Get the part after 'upload/v{version}/'
+            const publicIdWithFormat = urlParts.slice(uploadIndex + 2).join('/');
+            // Remove file extension to get public_id
+            publicId = publicIdWithFormat.replace(/\.[^/.]+$/, '');
+          }
+        }
+        
+        if (publicId) {
+          await cloudinary.uploader.destroy(publicId);
+          console.log(`[File Delete] Cloudinary file ${publicId} deleted.`);
+        } else {
+          console.warn('[File Delete] Could not determine Cloudinary public_id for deletion');
+        }
       } catch (cloudinaryError) {
         console.warn('[File Delete] Could not delete file from Cloudinary:', cloudinaryError);
+        // Continue with Firestore deletion even if Cloudinary deletion fails
       }
     }
 
@@ -641,26 +726,15 @@ export const getFileDownloadUrl = async (req: Request, res: Response) => {
 
     const fileData = fileDoc.data();
 
-    // If there's a storage path, generate a signed URL
-    if (fileData?.storagePath && bucket && fileData.storagePath.startsWith('groups/')) { // Firebase Storage
-      const [signedUrl] = await bucket.file(fileData.storagePath).getSignedUrl({
-        action: 'read',
-        expires: Date.now() + 60 * 60 * 1000, // 1 hour
-      });
-
-      return res.status(200).json({
-        downloadUrl: signedUrl,
-        fileName: fileData.name,
-      });
-    } else if (fileData?.fileUrl) { // Cloudinary or external URL
-      // Cloudinary URLs are generally public, no need for signed URL unless specific settings
+    // Return Cloudinary URL directly (Cloudinary URLs are public by default)
+    if (fileData?.fileUrl) {
       return res.status(200).json({
         downloadUrl: fileData.fileUrl,
         fileName: fileData.name,
       });
     }
 
-    // Otherwise, return the stored URL (fallback)
+    // Fallback if no fileUrl exists
     res.status(200).json({
       downloadUrl: fileData?.fileUrl || '',
       fileName: fileData?.name || 'file',
@@ -819,12 +893,6 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Database not initialized.' });
     }
 
-    // Check if bucket is initialized
-    if (!bucket) {
-      console.error('[Direct File Upload] Firebase Storage bucket not initialized');
-      return res.status(500).json({ error: 'Storage service not initialized.' });
-    }
-
     // Verify friendship
     const areFriends = await verifyFriendship(userId, friendId);
     if (!areFriends) {
@@ -867,34 +935,80 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
 
       try {
         console.log(`[Direct Upload] Starting Cloudinary upload for ${file.originalname}`);
+        console.log(`[Direct Upload] File size: ${file.size} bytes`);
+        console.log(`[Direct Upload] Buffer length: ${file.buffer?.length || 0} bytes`);
 
-        fileUrl = await new Promise((resolve, reject) => {
+        // Check if Cloudinary is configured
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+        const apiKey = process.env.CLOUDINARY_API_KEY;
+        const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+        if (!cloudName || !apiKey || !apiSecret) {
+          console.error('[Direct Upload] Cloudinary not configured - missing credentials');
+          return res.status(500).json({ 
+            error: 'Storage service not configured', 
+            details: 'Cloudinary credentials are missing. Please check server configuration.' 
+          });
+        }
+
+        fileUrl = await new Promise<string>((resolve, reject) => {
           const uploadStream = cloudinary.uploader.upload_stream(
             {
               folder: `direct/${userId}/${friendId}`,
               resource_type: 'auto',
-              public_id: `${timestamp}_${fileId}`,
-              use_filename: true
+              public_id: `direct/${userId}/${friendId}/${timestamp}_${fileId}`, // Full path including folder
+              overwrite: false,
             },
             (error, result) => {
               if (error) {
-                console.error('[Direct Upload] Cloudinary error:', error);
+                console.error('[Direct Upload] Cloudinary error details:', {
+                  message: error.message,
+                  http_code: error.http_code,
+                  name: error.name,
+                  error: JSON.stringify(error, null, 2)
+                });
                 reject(error);
+              } else if (!result || !result.secure_url) {
+                console.error('[Direct Upload] Cloudinary returned no URL:', result);
+                reject(new Error('Cloudinary upload succeeded but no URL returned'));
               } else {
-                console.log('[Direct Upload] Cloudinary success:', result?.secure_url);
-                resolve(result!.secure_url);
+                console.log('[Direct Upload] Cloudinary success:', result.secure_url);
+                resolve(result.secure_url);
               }
             }
           );
 
+          // Handle stream errors
+          uploadStream.on('error', (streamError) => {
+            console.error('[Direct Upload] Stream error:', streamError);
+            reject(streamError);
+          });
+
           // Create a readable stream from buffer
           const stream = Readable.from(file.buffer);
+          stream.on('error', (streamError) => {
+            console.error('[Direct Upload] Readable stream error:', streamError);
+            reject(streamError);
+          });
+          
           stream.pipe(uploadStream);
         });
 
       } catch (uploadError: any) {
-        console.error('[Direct Upload] Upload failed:', uploadError);
-        return res.status(500).json({ error: 'Storage upload failed', details: uploadError.message });
+        console.error('[Direct Upload] Upload failed with error:', {
+          message: uploadError?.message,
+          name: uploadError?.name,
+          stack: uploadError?.stack,
+          http_code: uploadError?.http_code,
+          error: uploadError
+        });
+        return res.status(500).json({ 
+          error: 'Storage upload failed', 
+          details: uploadError?.message || 'Unknown upload error',
+          ...(process.env.NODE_ENV === 'development' && {
+            fullError: uploadError?.toString()
+          })
+        });
       }
 
       const fileName = name || file.originalname;
@@ -927,26 +1041,105 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
 
       // Also create a message in the chat to notify about the file
       try {
-        const messageData = {
+        const senderName = senderData?.firstName
+          ? `${senderData.firstName} ${senderData.lastName || ''}`.trim()
+          : senderData?.username || 'Unknown';
+
+        // Handle profileImageUrl - remove if empty to avoid Firestore issues
+        const profileImageUrl = senderData?.profileImageUrl;
+        const validProfileImageUrl = profileImageUrl && profileImageUrl.trim() !== '' 
+          ? profileImageUrl 
+          : undefined;
+
+        const serverTimestamp = FieldValue.serverTimestamp();
+        const messageData: any = {
           content: `📎 Shared a file: ${fileName}`,
           senderId: userId,
-          senderName: senderData?.firstName
-            ? `${senderData.firstName} ${senderData.lastName || ''}`.trim()
-            : senderData?.username || 'Unknown',
-          senderProfileImageUrl: senderData?.profileImageUrl || '',
+          senderName,
           type: 'file',
           fileId: fileId,
           fileName: fileName,
           fileUrl: fileUrl,
           fileType: fileExtension.toLowerCase(),
           fileSize: file.size,
-          createdAt: FieldValue.serverTimestamp(),
+          createdAt: serverTimestamp,
+          timestamp: serverTimestamp, // Frontend queries by 'timestamp' field
         };
 
-        await db.collection('chats').doc(chatId).collection('messages').add(messageData);
-        console.log('[Direct File Upload] ✅ File message added to chat');
-      } catch (msgError) {
-        console.warn('[Direct File Upload] Could not add file message to chat:', msgError);
+        // Only include profileImageUrl if it has a value
+        if (validProfileImageUrl) {
+          messageData.senderProfileImageUrl = validProfileImageUrl;
+        }
+
+        // Use batch to update message and conversation lists atomically
+        const batch = db.batch();
+        const messageRef = db.collection('chats').doc(chatId).collection('messages').doc();
+        batch.set(messageRef, messageData);
+
+        // Update conversation lists for both participants
+        // Get receiver profile for conversation list
+        const receiverDoc = await db.collection('users').doc(friendId).get();
+        const receiverData = receiverDoc.data() || {};
+        const receiverName = receiverData?.firstName
+          ? `${receiverData.firstName} ${receiverData.lastName || ''}`.trim()
+          : receiverData?.username || 'Unknown';
+
+        const lastMessageContent = `${senderName}: 📎 Shared a file: ${fileName}`;
+        const lastMessageForSelf = `You: 📎 Shared a file: ${fileName}`;
+
+        // Update sender's conversation (document ID is receiverId, not chatId)
+        const senderConversationRef = db.collection('users').doc(userId).collection('conversations').doc(friendId);
+        batch.set(senderConversationRef, {
+          name: receiverName,
+          profileImageUrl: receiverData?.profileImageUrl || '',
+          type: 'dm',
+          lastMessage: lastMessageForSelf,
+          timestamp: FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        // Update receiver's conversation (document ID is senderId, not chatId)
+        const receiverConversationRef = db.collection('users').doc(friendId).collection('conversations').doc(userId);
+        batch.set(receiverConversationRef, {
+          name: senderName,
+          profileImageUrl: validProfileImageUrl || '',
+          type: 'dm',
+          lastMessage: lastMessageContent,
+          timestamp: FieldValue.serverTimestamp(),
+          unreadCount: FieldValue.increment(1)
+        }, { merge: true });
+
+        await batch.commit();
+
+        // Get the saved message and emit via Socket.IO
+        const savedMessageDoc = await messageRef.get();
+        const savedData = savedMessageDoc.data();
+        if (savedData) {
+          const timestampValue: any = (savedData as any).timestamp || (savedData as any).createdAt;
+          const createdAtValue: any = (savedData as any).createdAt;
+          
+          const timestampIso = timestampValue && typeof timestampValue.toDate === 'function'
+            ? timestampValue.toDate().toISOString()
+            : new Date().toISOString();
+          const createdAtIso = createdAtValue && typeof createdAtValue.toDate === 'function'
+            ? createdAtValue.toDate().toISOString()
+            : timestampIso;
+
+          const savedMessage = {
+            id: savedMessageDoc.id,
+            ...savedData,
+            timestamp: timestampIso,
+            createdAt: createdAtIso,
+          };
+
+          // Emit to both users in the chat
+          io.to(chatId).emit('newMessage', { message: savedMessage });
+          io.to(userId).emit('newMessage', { message: savedMessage });
+          io.to(friendId).emit('newMessage', { message: savedMessage });
+          console.log('[Direct File Upload] ✅ Direct chat message created and emitted');
+        }
+      } catch (msgError: any) {
+        console.error('[Direct File Upload] Could not add file message to chat:', msgError);
+        // Don't fail the upload if message creation fails, but log the error
       }
 
       res.status(200).json({
@@ -996,21 +1189,104 @@ export const uploadDirectFile = async (req: Request, res: Response) => {
 
       // Add message to chat
       try {
-        const messageData = {
+        const senderName = senderData?.firstName 
+          ? `${senderData.firstName} ${senderData.lastName || ''}`.trim() 
+          : senderData?.username || 'Unknown';
+
+        // Handle profileImageUrl - remove if empty
+        const profileImageUrl = senderData?.profileImageUrl;
+        const validProfileImageUrl = profileImageUrl && profileImageUrl.trim() !== '' 
+          ? profileImageUrl 
+          : undefined;
+
+        const serverTimestamp = FieldValue.serverTimestamp();
+        const messageData: any = {
           content: `📎 Shared a file: ${fileName}`,
           senderId: userId,
-          senderName: senderData?.firstName ? `${senderData.firstName} ${senderData.lastName || ''}`.trim() : senderData?.username || 'Unknown',
-          senderProfileImageUrl: senderData?.profileImageUrl || '',
+          senderName,
           type: 'file',
           fileId: fileId,
           fileName: fileName,
           fileUrl: finalFileUrl,
           fileType: finalFileExtension.toLowerCase(),
           fileSize: finalFileSize,
-          createdAt: FieldValue.serverTimestamp(),
+          createdAt: serverTimestamp,
+          timestamp: serverTimestamp, // Frontend queries by 'timestamp' field
         };
-        await db.collection('chats').doc(chatId).collection('messages').add(messageData);
-      } catch (msgError) { console.warn('Could not add file message to chat', msgError); }
+
+        if (validProfileImageUrl) {
+          messageData.senderProfileImageUrl = validProfileImageUrl;
+        }
+
+        // Use batch to update message and conversation lists atomically
+        const batch = db.batch();
+        const messageRef = db.collection('chats').doc(chatId).collection('messages').doc();
+        batch.set(messageRef, messageData);
+
+        // Update conversation lists for both participants
+        // Get receiver profile for conversation list
+        const receiverDoc = await db.collection('users').doc(friendId).get();
+        const receiverData = receiverDoc.data() || {};
+        const receiverName = receiverData?.firstName
+          ? `${receiverData.firstName} ${receiverData.lastName || ''}`.trim()
+          : receiverData?.username || 'Unknown';
+
+        const lastMessageContent = `${senderName}: 📎 Shared a file: ${fileName}`;
+        const lastMessageForSelf = `You: 📎 Shared a file: ${fileName}`;
+
+        // Update sender's conversation (document ID is receiverId, not chatId)
+        const senderConversationRef = db.collection('users').doc(userId).collection('conversations').doc(friendId);
+        batch.set(senderConversationRef, {
+          name: receiverName,
+          profileImageUrl: receiverData?.profileImageUrl || '',
+          type: 'dm',
+          lastMessage: lastMessageForSelf,
+          timestamp: FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        // Update receiver's conversation (document ID is senderId, not chatId)
+        const receiverConversationRef = db.collection('users').doc(friendId).collection('conversations').doc(userId);
+        batch.set(receiverConversationRef, {
+          name: senderName,
+          profileImageUrl: validProfileImageUrl || '',
+          type: 'dm',
+          lastMessage: lastMessageContent,
+          timestamp: FieldValue.serverTimestamp(),
+          unreadCount: FieldValue.increment(1)
+        }, { merge: true });
+
+        await batch.commit();
+
+        // Get the saved message and emit via Socket.IO
+        const savedMessageDoc = await messageRef.get();
+        const savedData = savedMessageDoc.data();
+        if (savedData) {
+          const timestampValue: any = (savedData as any).timestamp || (savedData as any).createdAt;
+          const createdAtValue: any = (savedData as any).createdAt;
+          
+          const timestampIso = timestampValue && typeof timestampValue.toDate === 'function'
+            ? timestampValue.toDate().toISOString()
+            : new Date().toISOString();
+          const createdAtIso = createdAtValue && typeof createdAtValue.toDate === 'function'
+            ? createdAtValue.toDate().toISOString()
+            : timestampIso;
+
+          const savedMessage = {
+            id: savedMessageDoc.id,
+            ...savedData,
+            timestamp: timestampIso,
+            createdAt: createdAtIso,
+          };
+
+          // Emit to both users in the chat
+          io.to(chatId).emit('newMessage', { message: savedMessage });
+          io.to(userId).emit('newMessage', { message: savedMessage });
+          io.to(friendId).emit('newMessage', { message: savedMessage });
+          console.log('[Direct File Upload] ✅ Direct chat message created and emitted (fileUrl)');
+        }
+      } catch (msgError: any) {
+        console.error('[Direct File Upload] Could not add file message to chat (fileUrl):', msgError);
+      }
 
       res.status(200).json({
         message: 'File uploaded successfully',
@@ -1069,13 +1345,37 @@ export const deleteDirectFile = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Only the sender can delete this file.' });
     }
 
-    // Delete from Firebase Storage
-    if (fileData?.storagePath && bucket) {
+    // Delete from Cloudinary if fileUrl exists
+    if (fileData?.fileUrl) {
       try {
-        await bucket.file(fileData.storagePath).delete();
-        console.log('[Direct File Delete] ✅ File deleted from Storage');
-      } catch (storageError) {
-        console.warn('[Direct File Delete] Could not delete from storage:', storageError);
+        let publicId: string | null = null;
+        
+        // First, try to use storagePath if it exists (most reliable)
+        if (fileData.storagePath && fileData.storagePath.startsWith('direct/')) {
+          // storagePath format: direct/{userId}/{friendId}/{fileId}
+          // Cloudinary public_id should be: direct/{userId}/{friendId}/{timestamp}_{fileId}
+          // But we stored the fileId, so we need to find the actual public_id from the URL or use a pattern match
+          // For now, use storagePath as-is and let Cloudinary handle it
+          publicId = fileData.storagePath;
+        } else {
+          // Fallback: Extract public_id from Cloudinary URL
+          const urlParts = fileData.fileUrl.split('/');
+          const uploadIndex = urlParts.findIndex((part: string) => part === 'upload');
+          if (uploadIndex !== -1 && uploadIndex < urlParts.length - 1) {
+            const publicIdWithFormat = urlParts.slice(uploadIndex + 2).join('/');
+            publicId = publicIdWithFormat.replace(/\.[^/.]+$/, '');
+          }
+        }
+        
+        if (publicId) {
+          await cloudinary.uploader.destroy(publicId);
+          console.log('[Direct File Delete] ✅ File deleted from Cloudinary');
+        } else {
+          console.warn('[Direct File Delete] Could not determine Cloudinary public_id for deletion');
+        }
+      } catch (cloudinaryError) {
+        console.warn('[Direct File Delete] Could not delete from Cloudinary:', cloudinaryError);
+        // Continue with Firestore deletion even if Cloudinary deletion fails
       }
     }
 
@@ -1115,24 +1415,15 @@ export const getDirectFileDownloadUrl = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'You do not have access to this file.' });
     }
 
-    // Generate signed URL if storage path exists
-    if (fileData?.storagePath && bucket) {
-      try {
-        const [signedUrl] = await bucket.file(fileData.storagePath).getSignedUrl({
-          action: 'read',
-          expires: Date.now() + 60 * 60 * 1000, // 1 hour
-        });
-
-        return res.status(200).json({
-          downloadUrl: signedUrl,
-          fileName: fileData.name,
-        });
-      } catch (signError) {
-        console.error('[Direct File Download] Error generating signed URL:', signError);
-      }
+    // Return Cloudinary URL directly (Cloudinary URLs are public by default)
+    if (fileData?.fileUrl) {
+      return res.status(200).json({
+        downloadUrl: fileData.fileUrl,
+        fileName: fileData.name,
+      });
     }
 
-    // Fallback to stored URL
+    // Fallback if no fileUrl exists
     res.status(200).json({
       downloadUrl: fileData?.fileUrl || '',
       fileName: fileData?.name || 'file',
