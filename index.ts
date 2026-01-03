@@ -107,6 +107,12 @@ if (isProduction) {
     allowedOrigins.push(frontendUrl);
   }
   
+  // Add Netlify frontend URL
+  const netlifyUrl = 'https://studyhive20.netlify.app';
+  if (!allowedOrigins.includes(netlifyUrl)) {
+    allowedOrigins.push(netlifyUrl);
+  }
+  
   console.log('🔒 Production CORS: Allowing origins:', allowedOrigins);
 } else {
   // Development: Allow localhost with different ports for local testing
@@ -144,26 +150,15 @@ app.set('trust proxy', 1);
 
 const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // In production: Block requests with no origin (security best practice)
-    // In development: Allow no-origin requests (for testing tools like Postman)
-    if (!origin) {
-      if (isProduction) {
-        console.warn('🚫 CORS blocked: Request with no origin (not allowed in production)');
-        return callback(new Error('CORS: Origin header required in production'));
-      } else {
-        // Development: Allow no-origin requests for testing
-        return callback(null, true);
-      }
-    }
-    
-    // Check if origin is in allowed list
+    // Allow server-to-server & health checks
+    if (!origin) return callback(null, true);
+
     if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.warn(`🚫 CORS blocked request from origin: ${origin}`);
-      console.warn(`   Allowed origins: ${allowedOrigins.join(', ')}`);
-      callback(new Error(`Origin ${origin} not allowed by CORS`));
+      return callback(null, true);
     }
+
+    console.warn("🚫 CORS blocked origin:", origin);
+    return callback(null, false); // ❌ DO NOT throw
   },
   // Allow all necessary HTTP methods including OPTIONS for preflight
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -384,34 +379,8 @@ const server = http.createServer(app);
 
 export const io = new Server(server, {
   cors: {
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      // In production: Block connections with no origin (security best practice)
-      // In development: Allow no-origin connections (for testing)
-      if (!origin) {
-        if (isProduction) {
-          console.warn('🚫 Socket.IO CORS blocked: Connection with no origin (not allowed in production)');
-          return callback(new Error('Socket.IO CORS: Origin header required in production'));
-        } else {
-          // Development: Allow no-origin connections for testing
-          return callback(null, true);
-        }
-      }
-      
-      // Check if origin is in allowed list
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn(`🚫 Socket.IO CORS blocked connection from origin: ${origin}`);
-        console.warn(`   Allowed origins: ${allowedOrigins.join(', ')}`);
-        callback(new Error('Socket.IO: Origin not allowed by CORS'));
-      }
-    },
-    // Allow necessary HTTP methods for Socket.IO handshake
-    methods: ['GET', 'POST'],
-    // Enable credentials to support authentication cookies/headers
+    origin: allowedOrigins,
     credentials: true,
-    // Allow necessary headers for Socket.IO
-    allowedHeaders: ['Content-Type', 'Authorization'],
   },
   // Transport configuration: WebSocket first, polling as fallback
   // In production, WebSocket will automatically use WSS (secure WebSocket)
