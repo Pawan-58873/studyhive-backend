@@ -426,20 +426,68 @@ export const sendFriendRequest = async (req: Request, res: Response) => {
 };
 
 
-// ... getFriendRequests function (no changes)
+// ... getFriendRequests function
 export const getFriendRequests = async (req: Request, res: Response) => {
     try {
         if (!db) {
-            return res.status(500).send({ error: 'Database not initialized.' });
+            console.error("❌ Database not initialized. Firebase credentials missing.");
+            console.error("   Please add FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY to your .env file");
+            return res.status(500).json({ 
+                error: 'Database not initialized. Please configure Firebase credentials in your .env file.',
+                details: 'Add FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY to your .env file (root or server directory)'
+            });
         }
 
-        const userId = req.user!.uid;
-        const requestsSnapshot = await db.collection('users').doc(userId).collection('friendRequests').where('status', '==', 'pending').get();
-        const requests = requestsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (!req.user || !req.user.uid) {
+            console.error("❌ User not found in request. Auth middleware may have failed.");
+            return res.status(401).json({ 
+                error: 'Unauthorized: User not authenticated.',
+                details: 'Please ensure you are logged in and the auth token is valid'
+            });
+        }
+
+        const userId = req.user.uid;
+        console.log(`[getFriendRequests] Fetching friend requests for user: ${userId}`);
+
+        // First, verify the user document exists
+        const userDocRef = db.collection('users').doc(userId);
+        const userDoc = await userDocRef.get();
+        
+        if (!userDoc.exists) {
+            console.error(`❌ User document not found for userId: ${userId}`);
+            return res.status(404).json({ 
+                error: 'User profile not found.',
+                details: 'Please complete your profile setup first'
+            });
+        }
+
+        // Query friend requests
+        const friendRequestsRef = userDocRef.collection('friendRequests');
+        const requestsSnapshot = await friendRequestsRef.where('status', '==', 'pending').get();
+        
+        console.log(`[getFriendRequests] Found ${requestsSnapshot.size} pending friend requests`);
+        
+        const requests = requestsSnapshot.docs.map(doc => {
+            const data = doc.data();
+            return { 
+                id: doc.id, 
+                ...data,
+                // Ensure timestamps are properly serialized
+                createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : data.createdAt
+            };
+        });
+        
         res.status(200).json(requests);
-    } catch (error) {
-        console.error("Error fetching friend requests:", error);
-        res.status(500).send({ error: 'Failed to fetch friend requests.' });
+    } catch (error: any) {
+        console.error("❌ Error fetching friend requests:", error);
+        console.error("   Error code:", error.code);
+        console.error("   Error message:", error.message);
+        console.error("   Stack:", error.stack);
+        res.status(500).json({ 
+            error: 'Failed to fetch friend requests.',
+            details: error.message || 'Unknown error occurred',
+            code: error.code || 'UNKNOWN_ERROR'
+        });
     }
 };
 

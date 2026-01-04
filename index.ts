@@ -38,15 +38,25 @@ console.log("   - FIREBASE_PRIVATE_KEY:", process.env.FIREBASE_PRIVATE_KEY ? '�
 console.log("   - FIREBASE_STORAGE_BUCKET:", process.env.FIREBASE_STORAGE_BUCKET || 'Using default');
 console.log("   - LIVEBLOCKS_SECRET_KEY:", process.env.LIVEBLOCKS_SECRET_KEY ? '✓ Set' : '✗ Missing');
 console.log("   - CLOUDINARY_CLOUD_NAME:", process.env.CLOUDINARY_CLOUD_NAME ? '✓ Set' : '✗ Missing (File uploads disabled)');
-// ⚠️ FOR TESTING ONLY: Log the Gemini API key (remove in production!)
-console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? `✓ Set (${process.env.GEMINI_API_KEY.substring(0, 8)}...${process.env.GEMINI_API_KEY.substring(process.env.GEMINI_API_KEY.length - 4)})` : '✗ Missing');
-if (process.env.GEMINI_API_KEY) {
-  console.log("   ⚠️  Full GEMINI_API_KEY (FOR TESTING ONLY - Remove in production!):", process.env.GEMINI_API_KEY);
-}
 console.log("   - CLOUDINARY_API_KEY:", process.env.CLOUDINARY_API_KEY ? '✓ Set' : '✗ Missing (File uploads disabled)');
 console.log("   - CLOUDINARY_API_SECRET:", process.env.CLOUDINARY_API_SECRET ? '✓ Set' : '✗ Missing (File uploads disabled)');
-console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? '✓ Set' : '✗ Missing (AI features disabled)');
+console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? '✓ Set (AI summarization enabled)' : '✗ Missing (AI summarization disabled)');
 console.log("   - DAILY_API_KEY:", process.env.DAILY_API_KEY ? '✓ Set' : '✗ Missing (Video calling disabled)');
+
+// Validate Gemini API key configuration (non-blocking)
+if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '') {
+  console.warn('⚠️  WARNING: GEMINI_API_KEY is not set. AI summarization features will not work.');
+  console.warn('   To enable AI summarization, set GEMINI_API_KEY in your environment variables.');
+  console.warn('   Get your API key from: https://makersuite.google.com/app/apikey');
+} else {
+  const apiKey = process.env.GEMINI_API_KEY.trim();
+  // Validate API key format (Google AI Studio keys typically start with "AIza")
+  if (!apiKey.startsWith('AIza')) {
+    console.warn('⚠️  WARNING: GEMINI_API_KEY format may be incorrect. Google AI Studio API keys usually start with "AIza"');
+  } else {
+    console.log('✅ GEMINI_API_KEY format validated');
+  }
+}
 
 import express from 'express';
 import cors from 'cors';
@@ -75,60 +85,57 @@ const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 const isProduction = process.env.NODE_ENV === 'production';
 
 // ============================================
-// CORS Configuration - Production-Ready Origin Handling
+// CORS Configuration - Environment-Based Origin Handling
 // ============================================
-// In development: Allow localhost origins for local testing
-// In production: Allow ONLY the frontend URL (https://studyhive-frontend-ten.vercel.app)
+// Environment-based CORS configuration:
+// - Development: Allows localhost origins (http://localhost:5173, etc.)
+// - Production: Only allows origins specified in CLIENT_ORIGIN environment variable
 // 
 // IMPORTANT FOR DEPLOYMENT:
-// - Set CLIENT_ORIGIN environment variable in Render to: https://studyhive-frontend-ten.vercel.app
+// - Set CLIENT_ORIGIN environment variable in Render to your Vercel frontend URL
+// - Example: CLIENT_ORIGIN=https://your-app.vercel.app
+// - For multiple origins, use comma-separated: CLIENT_ORIGIN=https://app1.vercel.app,https://app2.vercel.app
 // - This ensures only your frontend can make requests to the backend
 // - Prevents unauthorized cross-origin requests
 
 const allowedOrigins: string[] = [];
 
 if (isProduction) {
-  // Production: Only allow explicitly configured origins
-  // Default frontend URL for StudyHive deployment
-  const frontendUrl = 'https://studyhive-frontend-ten.vercel.app';
-  
-  // Add the frontend URL from environment variable or use default
-  if (clientOrigin) {
+  // Production: Only allow explicitly configured origins from CLIENT_ORIGIN
+  if (clientOrigin && clientOrigin !== 'http://localhost:5173') {
     // Support comma-separated list of origins
     if (clientOrigin.includes(',')) {
-      allowedOrigins.push(...clientOrigin.split(',').map(origin => origin.trim()));
+      const origins = clientOrigin.split(',').map(origin => origin.trim()).filter(Boolean);
+      allowedOrigins.push(...origins);
     } else {
       allowedOrigins.push(clientOrigin);
     }
   }
   
-  // Always add the default frontend URL if not already present
-  if (!allowedOrigins.includes(frontendUrl)) {
-    allowedOrigins.push(frontendUrl);
-  }
-  
-  // Add Netlify frontend URL
-  const netlifyUrl = 'https://studyhive20.netlify.app';
-  if (!allowedOrigins.includes(netlifyUrl)) {
-    allowedOrigins.push(netlifyUrl);
+  if (allowedOrigins.length === 0) {
+    console.warn('⚠️  WARNING: No CLIENT_ORIGIN set in production! CORS will block all requests.');
+    console.warn('   Set CLIENT_ORIGIN environment variable in Render to your Vercel frontend URL.');
   }
   
   console.log('🔒 Production CORS: Allowing origins:', allowedOrigins);
 } else {
   // Development: Allow localhost with different ports for local testing
   allowedOrigins.push(
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'http://localhost:4173', // Vite preview
+    'http://localhost:5173',  // Vite dev server (default)
+    'http://localhost:5174',  // Alternative port
+    'http://localhost:4173',  // Vite preview
     'http://127.0.0.1:5173',
     'http://127.0.0.1:5174',
     'http://127.0.0.1:4173'
   );
   
-  // Also add custom CLIENT_ORIGIN in development if specified
-  if (clientOrigin && !allowedOrigins.includes(clientOrigin)) {
+  // Also add custom CLIENT_ORIGIN in development if specified (for testing)
+  if (clientOrigin && clientOrigin !== 'http://localhost:5173' && !allowedOrigins.includes(clientOrigin)) {
     allowedOrigins.push(clientOrigin);
+    console.log('🔧 Development: Added custom CLIENT_ORIGIN:', clientOrigin);
   }
+  
+  console.log('🔧 Development CORS: Allowing origins:', allowedOrigins);
 }
 
 // Trust proxy for deployment behind reverse proxy (Render, Railway, etc.)
@@ -227,7 +234,12 @@ app.get('/', (req, res) => {
 
 // Health check endpoint (no auth required)
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    firebase: db ? 'initialized' : 'not initialized',
+    environment: isProduction ? 'production' : 'development'
+  });
 });
 
 // Debug endpoint to test Firestore connection (no auth required)
@@ -352,7 +364,7 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/liveblocks', liveblocksRoutes); // Liveblocks routes enabled
 app.use('/api/admin', adminRoutes); // Admin routes for dashboard management
-app.use('/api/ai', aiRoutes); // AI routes for summarization and study tools
+app.use('/api/ai', aiRoutes); // AI routes for text summarization
 app.use('/api/upload', uploadRoutes); // Upload routes for Cloudinary
 
 const server = http.createServer(app);

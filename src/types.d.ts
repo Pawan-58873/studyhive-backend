@@ -5,6 +5,7 @@
 // This tells TypeScript to not worry about their type and just let us use them.
 declare module 'pdf-parse';
 declare module 'mammoth';
+declare module 'officeparser';
 declare module 'pptx-parser';
 declare module 'node-fetch';
 
