@@ -2,6 +2,7 @@
 
 import { Router } from 'express';
 import { createSession, getGroupSessions, updateSession, deleteSession } from '../controllers/session.controller';
+import { getOrCreateSessionDailyRoom } from '../controllers/daily.controller';
 import { checkAuth } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -21,6 +22,10 @@ router.patch('/:sessionId', checkAuth, updateSession);
 // Route to delete a study session
 // DELETE /api/sessions/:sessionId
 router.delete('/:sessionId', checkAuth, deleteSession);
+
+// Route to get or create Daily.co room for a study session
+// POST /api/sessions/:sessionId/call
+router.post('/:sessionId/call', checkAuth, getOrCreateSessionDailyRoom);
 
 
 export default router;
