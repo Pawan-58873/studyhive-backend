@@ -13,10 +13,59 @@ export const getCurrentUser = async (req: Request, res: Response) => {
         }
 
         const userId = req.user!.uid;
-        const userDoc = await db.collection('users').doc(userId).get();
+        let userDoc = await db.collection('users').doc(userId).get();
         
+        // If user doesn't exist in Firestore, create it automatically
+        // This handles cases where user was created in Firebase Auth but Firestore document wasn't created
+        // (e.g., Google signup, or Firestore write failed during email signup)
         if (!userDoc.exists) {
-            return res.status(404).json({ error: 'User not found.' });
+            console.log(`📝 Auto-creating Firestore document for user ${userId} (exists in Firebase Auth but not in Firestore)`);
+            
+            try {
+                // Get user data from Firebase Auth
+                const firebaseUser = await auth.getUser(userId);
+                
+                // Generate username from email if not available
+                const email = firebaseUser.email || '';
+                const username = email.split('@')[0] || `user${Math.floor(1000 + Math.random() * 9000)}`;
+                
+                // Parse display name
+                const displayName = firebaseUser.displayName || '';
+                const nameParts = displayName.split(' ');
+                const firstName = nameParts[0] || null;
+                const lastName = nameParts.slice(1).join(' ') || null;
+                
+                // Create user document in Firestore
+                const newUserData: Partial<User> = {
+                    username: username,
+                    email: email,
+                    firstName: firstName,
+                    lastName: lastName,
+                    profileImageUrl: firebaseUser.photoURL || null,
+                    role: 'user',
+                    createdAt: FieldValue.serverTimestamp(),
+                    updatedAt: FieldValue.serverTimestamp(),
+                };
+                
+                await db.collection('users').doc(userId).set(newUserData);
+                
+                // Also create username mapping if username is available
+                if (username) {
+                    await db.collection('usernames').doc(username.toLowerCase()).set({ uid: userId }).catch((err) => {
+                        // Ignore errors if username already exists
+                        console.warn(`Username mapping may already exist: ${username}`, err);
+                    });
+                }
+                
+                console.log(`✅ Auto-created Firestore document for user ${userId}`);
+                
+                // Re-fetch the document
+                userDoc = await db.collection('users').doc(userId).get();
+            } catch (createError) {
+                console.error("Error auto-creating user document:", createError);
+                // If auto-creation fails, still return 404
+                return res.status(404).json({ error: 'User not found. Failed to create user profile.' });
+            }
         }
         
         const userData = userDoc.data() as User;
