@@ -104,6 +104,7 @@ const allowedOrigins: string[] = [];
 
 if (isProduction) {
   // Production: Only allow explicitly configured origins from CLIENT_ORIGIN
+  // Only the production URL is allowed - preview URLs are blocked for security
   if (clientOrigin && clientOrigin !== 'http://localhost:5173') {
     // Support comma-separated list of origins
     if (clientOrigin.includes(',')) {
@@ -117,9 +118,11 @@ if (isProduction) {
   if (allowedOrigins.length === 0) {
     console.warn('⚠️  WARNING: No CLIENT_ORIGIN set in production! CORS will block all requests.');
     console.warn('   Set CLIENT_ORIGIN environment variable in Render to your Vercel frontend URL.');
+    console.warn('   Example: CLIENT_ORIGIN=https://studyhive-frontend-ten.vercel.app');
   }
   
-  console.log('🔒 Production CORS: Allowing origins:', allowedOrigins);
+  console.log('🔒 Production CORS: Allowing only explicitly configured origins:', allowedOrigins);
+  console.log('🔒 Production CORS: Preview URLs will be blocked (only production URL allowed)');
 } else {
   // Development: Allow localhost with different ports for local testing
   allowedOrigins.push(
@@ -162,11 +165,16 @@ const corsOptions = {
     // Allow server-to-server & health checks
     if (!origin) return callback(null, true);
 
+    // Check if origin is explicitly allowed (exact match only)
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
+    // Block all other origins (including preview URLs)
     console.warn("🚫 CORS blocked origin:", origin);
+    if (isProduction && origin.includes('.vercel.app') && !allowedOrigins.includes(origin)) {
+      console.warn("   ℹ️  Preview URLs are blocked. Only the production URL is allowed.");
+    }
     return callback(null, false); // ❌ DO NOT throw
   },
   // Allow all necessary HTTP methods including OPTIONS for preflight
