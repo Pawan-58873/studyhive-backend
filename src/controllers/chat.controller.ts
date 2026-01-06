@@ -160,32 +160,3 @@ export const sendChatMessage = async (req: Request, res: Response) => {
         res.status(500).send({ error: 'Failed to send message.' });
     }
 };
-
-// Add this new function to the end of the file
-export const logCallEvent = async (req: Request, res: Response) => {
-    try {
-        if (!db) {
-            return res.status(500).send({ error: 'Database not initialized.' });
-        }
-
-        const { chatId } = req.params; // Use chatId for one-on-one chats
-        const { callerName, type, duration } = req.body;
-
-        // Create the special "call log" message
-        const messageData = {
-            senderId: 'system', // Special ID for system messages
-            senderName: callerName,
-            createdAt: FieldValue.serverTimestamp(),
-            type: 'call-log', // Special type for our message bubble
-            callInfo: { type, duration } // Data about the call
-        };
-
-        // Add the new message to the chats messages subcollection
-        await db.collection('chats').doc(chatId).collection('messages').add(messageData);
-
-        res.status(201).send({ message: "Call event logged." });
-    } catch (error) {
-        console.error("Error logging call event:", error);
-        res.status(500).send({ error: "Failed to log call event." });
-    }
-};

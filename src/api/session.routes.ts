@@ -2,7 +2,8 @@
 
 import { Router } from 'express';
 import { createSession, getGroupSessions, updateSession, deleteSession } from '../controllers/session.controller';
-import { getOrCreateSessionDailyRoom } from '../controllers/daily.controller';
+import { checkSessionRoomAccess } from '../controllers/room-access.controller';
+import { createOrGetSessionDailyRoom, endSessionDailyRoom } from '../controllers/daily-room.controller';
 import { checkAuth } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -23,9 +24,16 @@ router.patch('/:sessionId', checkAuth, updateSession);
 // DELETE /api/sessions/:sessionId
 router.delete('/:sessionId', checkAuth, deleteSession);
 
-// Route to get or create Daily.co room for a study session
-// POST /api/sessions/:sessionId/call
-router.post('/:sessionId/call', checkAuth, getOrCreateSessionDailyRoom);
+// Route to check room access for session calls
+// GET /api/sessions/:sessionId/room-access
+router.get('/:sessionId/room-access', checkAuth, checkSessionRoomAccess);
 
+// Route to create or get Daily room for session calls
+// POST /api/sessions/:sessionId/daily-room
+router.post('/:sessionId/daily-room', checkAuth, createOrGetSessionDailyRoom);
+
+// Route to end/deactivate Daily room for session calls (host/moderator only)
+// DELETE /api/sessions/:sessionId/daily-room
+router.delete('/:sessionId/daily-room', checkAuth, endSessionDailyRoom);
 
 export default router;

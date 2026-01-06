@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import { db } from '../config/firebase';
 import { InsertStudySession, insertStudySessionSchema } from '../shared/schema';
 import { Timestamp } from 'firebase-admin/firestore';
+import { scheduleSessionReminders } from '../services/notification.service';
 
 /**
  * Create a new study session for a group
@@ -34,7 +35,21 @@ export const createSession = async (req: Request, res: Response) => {
     // 3. Add the new session to the 'sessions' collection
     const docRef = await db.collection('sessions').add(newSessionData);
 
-    // 4. Send back the newly created session with its ID
+    // 4. Schedule reminder notifications for group members
+    try {
+      const startTime = newSessionData.startTime.toDate();
+      await scheduleSessionReminders(
+        docRef.id,
+        sessionData.groupId,
+        sessionData.title,
+        startTime
+      );
+    } catch (reminderError) {
+      console.error('Error scheduling session reminders:', reminderError);
+      // Don't fail the request if reminder scheduling fails
+    }
+
+    // 5. Send back the newly created session with its ID
     res.status(201).json({ id: docRef.id, ...newSessionData });
 
   } catch (error) {

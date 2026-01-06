@@ -13,12 +13,12 @@ import {
     updateMemberRole,
     removeMember,
     addMemberToGroup,
-    logCallEvent,
     updateGroup, // <-- NEW
     deleteGroup, // <-- NEW
     leaveGroup // <-- Add this line
 } from '../controllers/group.controller.js'; // Ensure .js for ESM compatibility
-import { getOrCreateDailyRoom } from '../controllers/daily.controller.js';
+import { checkGroupRoomAccess } from '../controllers/room-access.controller.js';
+import { createOrGetGroupDailyRoom, endGroupDailyRoom } from '../controllers/daily-room.controller.js';
 
 const router = Router();
 
@@ -38,11 +38,14 @@ router.get('/:groupId/messages', getGroupMessages);
 // --- Route for sending a message ---
 router.post('/:groupId/messages', sendGroupMessage);
 
-// Route to log a call event (missed call, call ended)
-router.post('/:groupId/log-call', logCallEvent);
+// --- Room access check for calls ---
+router.get('/:groupId/room-access', checkGroupRoomAccess);
 
-// --- Daily.co call route ---
-router.post('/:groupId/call', getOrCreateDailyRoom);
+// --- Daily room creation/retrieval for calls ---
+router.post('/:groupId/daily-room', createOrGetGroupDailyRoom);
+
+// --- Daily room end/deactivate for calls (host/moderator only) ---
+router.delete('/:groupId/daily-room', endGroupDailyRoom);
 
 // --- NEW: Group management routes ---
 router.patch('/:groupId', updateGroup); // Update group settings

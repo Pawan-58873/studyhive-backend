@@ -6,6 +6,7 @@
     import { insertGroupSchema, insertMessageSchema, User } from '../shared/schema';
     import { nanoid } from 'nanoid';
     import { FieldValue } from 'firebase-admin/firestore';
+    import { sendGroupInviteNotification, sendMessageNotification } from '../services/notification.service';
 
     export const createGroup = async (req: Request, res: Response) => {
     try {
@@ -109,6 +110,10 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     const messageRef = db.collection('groups').doc(groupId).collection('messages').doc();
     batch.set(messageRef, messageData);
 
+    // Get group data for notifications
+    const groupDoc = await db.collection('groups').doc(groupId).get();
+    const groupData = groupDoc.data();
+    
     // Get all members of the group to update their conversation lists
     const membersSnapshot = await db.collection('groups').doc(groupId).collection('members').get();
     
@@ -146,6 +151,34 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     };
     
     io.to(groupId).emit('newMessage', { message: savedMessage });
+    
+    // Send push notifications to group members (except sender)
+    try {
+      const memberIds = membersSnapshot.docs
+        .map(doc => doc.id)
+        .filter(id => id !== senderId);
+      
+      if (memberIds.length > 0) {
+        // Import sendNotificationToUsers for batch sending
+        const { sendNotificationToUsers } = await import('../services/notification.service');
+        
+        // Send notifications to all members in background (don't wait)
+        sendNotificationToUsers(memberIds, {
+          type: 'message',
+          title: `New message in ${groupData?.name || 'group'}`,
+          message: `${senderName}: ${validatedData.content.substring(0, 100)}${validatedData.content.length > 100 ? '...' : ''}`,
+          relatedId: groupId,
+          data: {
+            groupId,
+            senderName,
+            senderId,
+          },
+        }).catch(err => console.error('Error sending message notifications:', err));
+      }
+    } catch (notifError) {
+      console.error('Error sending message notifications:', notifError);
+      // Don't fail the request if notification fails
+    }
     
     res.status(201).json(savedMessage);
 
@@ -213,6 +246,23 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
             });
             
             await batch.commit();
+            
+            // Send notification to the new member
+            const requesterProfile = (await db.collection('users').doc(requesterId).get()).data() as User;
+            const requesterName = `${requesterProfile.firstName || ''} ${requesterProfile.lastName || ''}`.trim() || requesterProfile.username;
+            
+            try {
+                await sendGroupInviteNotification(
+                    newUserId,
+                    groupId,
+                    groupData?.name || 'Group',
+                    requesterName
+                );
+            } catch (notifError) {
+                console.error('Error sending group invite notification:', notifError);
+                // Don't fail the request if notification fails
+            }
+            
             res.status(200).send({ message: 'Member added successfully.' });
 
         } catch (error) {
@@ -248,9 +298,22 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
                 .collection('groups')
                 .where(fieldPath, 'in', chunk);
             const querySnapshot = await groupsQuery.get();
-            querySnapshot.docs.forEach(doc => {
-                allGroups.push({ id: doc.id, ...doc.data() });
+            
+            // Fetch member counts for all groups in parallel
+            const groupPromises = querySnapshot.docs.map(async (doc) => {
+                try {
+                    const membersSnapshot = await db.collection('groups').doc(doc.id).collection('members').get();
+                    const memberCount = membersSnapshot.size;
+                    return { id: doc.id, ...doc.data(), memberCount };
+                } catch (error) {
+                    // If member count fetch fails, default to 0
+                    console.error(`Error fetching member count for group ${doc.id}:`, error);
+                    return { id: doc.id, ...doc.data(), memberCount: 0 };
+                }
             });
+            
+            const groupsWithMembers = await Promise.all(groupPromises);
+            allGroups.push(...groupsWithMembers);
         }
 
         res.status(200).json(allGroups);
@@ -368,6 +431,29 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
                 unreadCount: 0 // --- UNREAD COUNT ---
             });
             await batch.commit();
+            
+            // Notify group admins about new member (optional - can be removed if not needed)
+            try {
+                const membersSnapshot = await db.collection('groups').doc(groupId).collection('members').get();
+                const adminIds = membersSnapshot.docs
+                    .filter(doc => doc.data().role === 'admin' && doc.id !== userId)
+                    .map(doc => doc.id);
+                
+                if (adminIds.length > 0) {
+                    const userName = `${userProfile.firstName || ''} ${userProfile.lastName || ''}`.trim() || userProfile.username;
+                    await sendMessageNotification(
+                        adminIds[0], // Notify first admin
+                        userName,
+                        `joined "${groupData.name}"`,
+                        undefined,
+                        groupId
+                    );
+                }
+            } catch (notifError) {
+                console.error('Error sending join notification:', notifError);
+                // Don't fail the request if notification fails
+            }
+            
             res.status(200).send({ message: 'Successfully joined group!', group: { id: groupId, ...groupData } });
         } catch (error) {
             console.error("Error joining group:", error);
@@ -430,73 +516,6 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
         console.error("Error removing member:", error);
         res.status(500).send({ error: 'Failed to remove member.' });
     }
-    };
-
-
-    export const logCallEvent = async (req: Request, res: Response) => {
-        try {
-            if (!db) {
-                return res.status(500).send({ error: 'Database not initialized.' });
-            }
-
-            const { groupId } = req.params;
-            const { type, duration, temporaryCallId } = req.body;
-
-            const messagesRef = db.collection('groups').doc(groupId).collection('messages');
-            const callLogQuery = messagesRef.where('callId', '==', temporaryCallId).limit(1);
-            const snapshot = await callLogQuery.get();
-
-            if (snapshot.empty) {
-                console.warn(`Original call log with ID ${temporaryCallId} not found.`);
-                return res.status(200).send({ message: 'Original call log not found, no action taken.' });
-            }
-
-            const callLogDoc = snapshot.docs[0];
-            
-            let newContent = '';
-            const originalContent = callLogDoc.data().content || '';
-            const isVideo = originalContent.toLowerCase().includes('video');
-
-            // Only create a log if the call was genuinely missed or lasted more than a second
-            if (type === 'missed') {
-                newContent = isVideo ? `Missed video call` : `Missed audio call`;
-            } else if (type === 'ended' && duration > 1000) { 
-                const durationInSeconds = Math.round(duration / 1000);
-                if (durationInSeconds < 60) {
-                    newContent = isVideo ? `Video call • ${durationInSeconds}s` : `Audio call • ${durationInSeconds}s`;
-                } else {
-                    const durationInMinutes = Math.ceil(durationInSeconds / 60);
-                    newContent = isVideo ? `Video call • ${durationInMinutes} min` : `Audio call • ${durationInMinutes} min`;
-                }
-            } else {
-                // If the call was ended instantly (e.g., cancelled before anyone could answer), just delete the "Calling..." message.
-                await callLogDoc.ref.delete();
-                // Emit an event so the frontend can remove the "Calling..." message in real-time
-                io.to(groupId).emit('callLogDeleted', { callId: temporaryCallId });
-                return res.status(200).send({ message: 'Short call log deleted.' });
-            }
-
-            await callLogDoc.ref.update({ content: newContent });
-
-            const updatedDoc = await callLogDoc.ref.get();
-            const updatedMessageData = updatedDoc.data()
-
-            if (updatedMessageData) {
-                const updatedMessage = { 
-                    id: updatedDoc.id, 
-                    ...updatedMessageData,
-                    createdAt: updatedMessageData.createdAt.toDate().toISOString(),
-                };
-                // Emit the update to all members of the group in real-time
-                io.to(groupId).emit('callLogUpdated', { updatedMessage });
-            }
-            
-            res.status(200).send({ message: 'Call event updated successfully.' });
-
-        } catch (error) {
-            console.error("Error logging call event:", error);
-            res.status(500).send({ error: "Failed to log call event." });
-        }
     };
 
     // --- NEW: Update Group Function ---

@@ -2,7 +2,7 @@
 // Fixed version with proper member fetching
 
 import { Router, Request, Response, NextFunction } from 'express';
-import { db, auth } from '../config/firebase';
+import { db, auth, admin } from '../config/firebase';
 import { checkAuth } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -41,6 +41,15 @@ const isCacheValid = () => Date.now() - lastFetch < CACHE_TTL;
 let isPreloading = false;
 const preloadData = async () => {
     if (isPreloading) return;
+    
+    // Check if Firebase is initialized before proceeding
+    if (!db) {
+        if (process.env.NODE_ENV === 'development') {
+            console.log('⏳ Waiting for Firebase initialization...');
+        }
+        return;
+    }
+    
     isPreloading = true;
     
     try {
@@ -70,20 +79,26 @@ const preloadData = async () => {
             };
         });
         
-        // Process groups WITH member counts - fetch all in parallel
+        // Process groups - fetch member counts in parallel (all at once for speed)
         console.log(`📊 Fetching member counts for ${groupsSnap.size} groups...`);
         
+        // Fetch all member counts in parallel with timeout protection
         const groupPromises = groupsSnap.docs.map(async (doc) => {
             const d = doc.data();
             let memberCount = 0;
             
             try {
-                // Fetch members subcollection
-                const membersSnap = await db.collection('groups').doc(doc.id).collection('members').get();
+                // Fetch members subcollection with 2 second timeout per query
+                const membersSnap = await Promise.race([
+                    db.collection('groups').doc(doc.id).collection('members').get(),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Timeout')), 2000)
+                    )
+                ]) as any;
                 memberCount = membersSnap.size;
-                console.log(`  - Group "${d.name}": ${memberCount} members`);
             } catch (e: any) {
-                console.log(`  - Group "${d.name}": Error fetching members - ${e.message}`);
+                // Silently fail - member count will be 0 (will be updated on next request)
+                // Don't log to reduce console noise
             }
             
             return {
@@ -99,18 +114,180 @@ const preloadData = async () => {
             };
         });
         
+        // Wait for all member counts in parallel (much faster than sequential)
         groupsCache = await Promise.all(groupPromises);
         
         // Calculate total members
         const totalMembers = groupsCache.reduce((sum, g) => sum + (g.memberCount || 0), 0);
+        
+        // Calculate messages from last 24 hours
+        console.log('📨 Counting messages from last 24 hours...');
+        const oneDayAgo = admin.firestore.Timestamp.fromDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+        let messagesToday = 0;
+        
+        try {
+            // Count group messages from last 24 hours
+            // Use a more efficient approach: get all messages and filter client-side if needed
+            // But first try with query, fallback to getting all if index missing
+            const groupMessagePromises = groupsSnap.docs.map(async (groupDoc) => {
+                try {
+                    // Try query with timestamp first
+                    let messagesSnap;
+                    try {
+                        messagesSnap = await db
+                            .collection('groups')
+                            .doc(groupDoc.id)
+                            .collection('messages')
+                            .where('createdAt', '>=', oneDayAgo)
+                            .get();
+                    } catch (queryError: any) {
+                        // If index error, get all messages and filter manually
+                        if (queryError.code === 9 || queryError.message?.includes('index')) {
+                            console.log(`   ⚠️ Index missing for group ${groupDoc.id}, fetching all messages...`);
+                            const allMessages = await db
+                                .collection('groups')
+                                .doc(groupDoc.id)
+                                .collection('messages')
+                                .get();
+                            
+                            // Filter messages from last 24 hours manually
+                            const recentMessages = allMessages.docs.filter(doc => {
+                                const createdAt = doc.data().createdAt;
+                                if (!createdAt) return false;
+                                
+                                // Handle both Timestamp and serverTimestamp placeholder
+                                let messageDate: Date;
+                                if (createdAt.toDate) {
+                                    messageDate = createdAt.toDate();
+                                } else if (createdAt._seconds) {
+                                    messageDate = new Date(createdAt._seconds * 1000);
+                                } else {
+                                    return false;
+                                }
+                                
+                                return messageDate >= oneDayAgo.toDate();
+                            });
+                            
+                            return recentMessages.length;
+                        }
+                        throw queryError;
+                    }
+                    return messagesSnap.size;
+                } catch (e: any) {
+                    // Log error for debugging but don't fail completely
+                    if (e.code !== 9 && !e.message?.includes('index')) {
+                        console.warn(`   ⚠️ Error counting messages for group ${groupDoc.id}:`, e.message);
+                    }
+                    return 0;
+                }
+            });
+            
+            const groupMessageCounts = await Promise.all(groupMessagePromises);
+            messagesToday += groupMessageCounts.reduce((sum, count) => sum + count, 0);
+            
+            // Count direct messages from last 24 hours
+            // Get all chats and count their messages
+            const chatsSnap = await db.collection('chats').get();
+            const chatMessagePromises = chatsSnap.docs.map(async (chatDoc) => {
+                try {
+                    // Try query with timestamp first
+                    let messagesSnap;
+                    try {
+                        messagesSnap = await db
+                            .collection('chats')
+                            .doc(chatDoc.id)
+                            .collection('messages')
+                            .where('createdAt', '>=', oneDayAgo)
+                            .get();
+                    } catch (queryError: any) {
+                        // If index error, get all messages and filter manually
+                        if (queryError.code === 9 || queryError.message?.includes('index')) {
+                            const allMessages = await db
+                                .collection('chats')
+                                .doc(chatDoc.id)
+                                .collection('messages')
+                                .get();
+                            
+                            // Filter messages from last 24 hours manually
+                            const recentMessages = allMessages.docs.filter(doc => {
+                                const createdAt = doc.data().createdAt;
+                                if (!createdAt) return false;
+                                
+                                // Handle both Timestamp and serverTimestamp placeholder
+                                let messageDate: Date;
+                                if (createdAt.toDate) {
+                                    messageDate = createdAt.toDate();
+                                } else if (createdAt._seconds) {
+                                    messageDate = new Date(createdAt._seconds * 1000);
+                                } else {
+                                    return false;
+                                }
+                                
+                                return messageDate >= oneDayAgo.toDate();
+                            });
+                            
+                            return recentMessages.length;
+                        }
+                        throw queryError;
+                    }
+                    return messagesSnap.size;
+                } catch (e: any) {
+                    // Log error for debugging but don't fail completely
+                    if (e.code !== 9 && !e.message?.includes('index')) {
+                        console.warn(`   ⚠️ Error counting messages for chat ${chatDoc.id}:`, e.message);
+                    }
+                    return 0;
+                }
+            });
+            
+            const chatMessageCounts = await Promise.all(chatMessagePromises);
+            messagesToday += chatMessageCounts.reduce((sum, count) => sum + count, 0);
+            
+            console.log(`   ✅ Found ${messagesToday} messages in last 24 hours (${groupMessageCounts.reduce((a, b) => a + b, 0)} group + ${chatMessageCounts.reduce((a, b) => a + b, 0)} direct)`);
+        } catch (e: any) {
+            console.warn('⚠️ Error counting messages:', e.message);
+            messagesToday = 0;
+        }
+        
+        // Calculate total files
+        console.log('📁 Counting total files...');
+        let totalFiles = 0;
+        
+        try {
+            // Count group files
+            const groupFilePromises = groupsSnap.docs.map(async (groupDoc) => {
+                try {
+                    const filesSnap = await db
+                        .collection('groups')
+                        .doc(groupDoc.id)
+                        .collection('files')
+                        .get();
+                    return filesSnap.size;
+                } catch (e) {
+                    return 0;
+                }
+            });
+            
+            const groupFileCounts = await Promise.all(groupFilePromises);
+            totalFiles += groupFileCounts.reduce((sum, count) => sum + count, 0);
+            
+            // Count direct files
+            const directFilesSnap = await db.collection('directFiles').get();
+            totalFiles += directFilesSnap.size;
+            
+            console.log(`   ✅ Found ${totalFiles} total files`);
+        } catch (e: any) {
+            console.warn('⚠️ Error counting files:', e.message);
+            totalFiles = 0;
+        }
         
         statsCache = {
             totalUsers: usersCache.length,
             activeGroups: groupsCache.filter(g => g.status === 'active').length,
             totalGroups: groupsCache.length,
             totalMembers,
-            messagesToday: 0,
-            totalFiles: 0,
+            messagesToday,
+            totalFiles,
             userGrowth: '+12%',
             groupGrowth: '+5%',
             messageGrowth: '+18%',
@@ -127,8 +304,49 @@ const preloadData = async () => {
     }
 };
 
-// Start pre-loading after 1 second
-setTimeout(preloadData, 1000);
+// Start pre-loading in background AFTER Firebase is initialized
+// Wait for Firebase to be ready before attempting pre-load
+const startPreload = async () => {
+    // Wait for Firebase to initialize (with timeout)
+    let attempts = 0;
+    const maxAttempts = 20; // 10 seconds max wait
+    
+    while (attempts < maxAttempts) {
+        try {
+            // Try to access db - this will trigger initialization if not done
+            if (db) {
+                // Test if db is actually working
+                await db.collection('users').limit(1).get();
+                // Firebase is ready, start pre-loading
+                preloadData().catch(err => {
+                    // Silently handle errors - routes will fetch on demand
+                    if (process.env.NODE_ENV === 'development') {
+                        console.error('Background pre-load error:', err.message);
+                    }
+                });
+                return;
+            }
+        } catch (e) {
+            // Firebase not ready yet, wait and retry
+        }
+        attempts++;
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    // If we get here, Firebase didn't initialize in time
+    // Pre-load will happen on-demand when routes are accessed
+    if (process.env.NODE_ENV === 'development') {
+        console.log('⚠️  Firebase not ready, pre-load will happen on-demand');
+    }
+};
+
+// Start pre-loading after server initialization (non-blocking)
+// This ensures Firebase is initialized first
+setTimeout(() => {
+    startPreload().catch(() => {
+        // Ignore errors - pre-load will happen on-demand
+    });
+}, 2000);
 
 // ============ USERS API ============
 

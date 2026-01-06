@@ -41,7 +41,7 @@ console.log("   - CLOUDINARY_CLOUD_NAME:", process.env.CLOUDINARY_CLOUD_NAME ? '
 console.log("   - CLOUDINARY_API_KEY:", process.env.CLOUDINARY_API_KEY ? '✓ Set' : '✗ Missing (File uploads disabled)');
 console.log("   - CLOUDINARY_API_SECRET:", process.env.CLOUDINARY_API_SECRET ? '✓ Set' : '✗ Missing (File uploads disabled)');
 console.log("   - GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? '✓ Set (AI summarization enabled)' : '✗ Missing (AI summarization disabled)');
-console.log("   - DAILY_API_KEY:", process.env.DAILY_API_KEY ? '✓ Set' : '✗ Missing (Video calling disabled)');
+console.log("   - DAILY_API_KEY:", process.env.DAILY_API_KEY ? '✓ Set (Video calling enabled)' : '✗ Missing (Video calling disabled)');
 
 // Validate Gemini API key configuration (non-blocking)
 if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY.trim() === '') {
@@ -77,6 +77,8 @@ import fileRoutes from './src/api/file.routes.ts';
 import directFileRoutes from './src/api/direct-file.routes.ts';
 import aiRoutes from './src/api/ai.routes.ts';
 import uploadRoutes from './src/api/upload.routes.ts';
+import notificationRoutes from './src/api/notification.routes.ts';
+import { startScheduler, cleanupOldReminders } from './src/services/scheduler.service.js';
 import { db } from './src/config/firebase.ts';
 
 const app = express();
@@ -366,6 +368,7 @@ app.use('/api/liveblocks', liveblocksRoutes); // Liveblocks routes enabled
 app.use('/api/admin', adminRoutes); // Admin routes for dashboard management
 app.use('/api/ai', aiRoutes); // AI routes for text summarization
 app.use('/api/upload', uploadRoutes); // Upload routes for Cloudinary
+app.use('/api/notifications', notificationRoutes); // Notification routes
 
 const server = http.createServer(app);
 
@@ -463,4 +466,12 @@ io.on('connection', (socket) => {
 
 server.listen(port, () => {
   console.log(`🚀 Server is now listening at http://localhost:${port}`);
+  
+  // Start notification scheduler
+  startScheduler();
+  
+  // Clean up old reminders daily
+  setInterval(() => {
+    cleanupOldReminders().catch(err => console.error('Error cleaning up reminders:', err));
+  }, 24 * 60 * 60 * 1000); // Every 24 hours
 });
