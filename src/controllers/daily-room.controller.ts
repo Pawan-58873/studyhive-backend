@@ -68,8 +68,48 @@ export const createOrGetGroupDailyRoom = async (req: Request, res: Response) => 
     // Check if a Daily room URL already exists
     if (groupData?.dailyRoomUrl) {
       const existingRoomUrl = groupData.dailyRoomUrl;
+      const roomCreatedAt = groupData?.dailyRoomCreatedAt;
       
-      // Verify the room still exists and is accessible
+      // Only verify room if it's older than 5 minutes (optimization)
+      // Fresh rooms (< 5 min) are assumed to be valid, avoiding unnecessary API calls
+      const shouldVerify = roomCreatedAt && 
+        roomCreatedAt.toMillis && 
+        (Date.now() - roomCreatedAt.toMillis()) > 5 * 60 * 1000;
+      
+      // If room is fresh, return immediately without verification
+      if (!shouldVerify) {
+        // Generate token for existing room
+        const roomName = existingRoomUrl.split('/').pop() || `studyhive-${groupId}`;
+        const tokenResponse = await fetch(`${DAILY_API_BASE_URL}/meeting-tokens`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${DAILY_API_KEY}`
+          },
+          body: JSON.stringify({
+            properties: {
+              room_name: roomName,
+              is_owner: false,
+              exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
+            }
+          })
+        });
+
+        let token: string | undefined;
+        if (tokenResponse.ok) {
+          const tokenData = await tokenResponse.json() as { token: string };
+          token = tokenData.token;
+        }
+
+        console.log(`✅ Returning cached Daily room for group ${groupId} (skipped verification)`);
+        return res.status(200).json({ 
+          roomUrl: existingRoomUrl,
+          token: token,
+          isNewRoom: false
+        });
+      }
+      
+      // Verify the room still exists and is accessible (only for older rooms)
       try {
         const roomName = existingRoomUrl.split('/').pop() || `studyhive-${groupId}`;
         const checkResponse = await fetch(`${DAILY_API_BASE_URL}/rooms/${roomName}`, {
@@ -137,7 +177,13 @@ export const createOrGetGroupDailyRoom = async (req: Request, res: Response) => 
           enable_knocking: false, // No waiting room
           start_video_off: false,
           start_audio_off: false,
-          max_participants: 50
+          max_participants: 50,
+          // Optimize screen share quality for better performance
+          screenshare_settings: {
+            max_fps: 30, // 30fps is sufficient for screen sharing
+            max_width: 1920,
+            max_height: 1080
+          }
         }
       })
     });
@@ -188,9 +234,10 @@ export const createOrGetGroupDailyRoom = async (req: Request, res: Response) => 
       console.warn('⚠️ Could not generate token, room may still work without it');
     }
 
-    // Save the room URL to the group document
+    // Save the room URL and creation timestamp to the group document
     await db.collection('groups').doc(groupId).update({
-      dailyRoomUrl: dailyRoomUrl
+      dailyRoomUrl: dailyRoomUrl,
+      dailyRoomCreatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
     console.log(`✅ Created and saved Daily room: ${dailyRoomUrl}`);
@@ -261,8 +308,48 @@ export const createOrGetSessionDailyRoom = async (req: Request, res: Response) =
     // Check if a Daily room URL already exists in the session
     if (sessionData?.dailyRoomUrl) {
       const existingRoomUrl = sessionData.dailyRoomUrl;
+      const roomCreatedAt = sessionData?.dailyRoomCreatedAt;
       
-      // Verify the room still exists and is accessible
+      // Only verify room if it's older than 5 minutes (optimization)
+      // Fresh rooms (< 5 min) are assumed to be valid, avoiding unnecessary API calls
+      const shouldVerify = roomCreatedAt && 
+        roomCreatedAt.toMillis && 
+        (Date.now() - roomCreatedAt.toMillis()) > 5 * 60 * 1000;
+      
+      // If room is fresh, return immediately without verification
+      if (!shouldVerify) {
+        // Generate token for existing room
+        const roomName = existingRoomUrl.split('/').pop() || `studyhive-session-${sessionId}`;
+        const tokenResponse = await fetch(`${DAILY_API_BASE_URL}/meeting-tokens`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${DAILY_API_KEY}`
+          },
+          body: JSON.stringify({
+            properties: {
+              room_name: roomName,
+              is_owner: false,
+              exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
+            }
+          })
+        });
+
+        let token: string | undefined;
+        if (tokenResponse.ok) {
+          const tokenData = await tokenResponse.json() as { token: string };
+          token = tokenData.token;
+        }
+
+        console.log(`✅ Returning cached Daily room for session ${sessionId} (skipped verification)`);
+        return res.status(200).json({ 
+          roomUrl: existingRoomUrl,
+          token: token,
+          isNewRoom: false
+        });
+      }
+      
+      // Verify the room still exists and is accessible (only for older rooms)
       try {
         const roomName = existingRoomUrl.split('/').pop() || `studyhive-session-${sessionId}`;
         const checkResponse = await fetch(`${DAILY_API_BASE_URL}/rooms/${roomName}`, {
@@ -330,7 +417,13 @@ export const createOrGetSessionDailyRoom = async (req: Request, res: Response) =
           enable_knocking: false, // No waiting room
           start_video_off: false,
           start_audio_off: false,
-          max_participants: 50
+          max_participants: 50,
+          // Optimize screen share quality for better performance
+          screenshare_settings: {
+            max_fps: 30, // 30fps is sufficient for screen sharing
+            max_width: 1920,
+            max_height: 1080
+          }
         }
       })
     });
@@ -380,9 +473,10 @@ export const createOrGetSessionDailyRoom = async (req: Request, res: Response) =
       console.warn('⚠️ Could not generate token, room may still work without it');
     }
 
-    // Save the room URL to the session document
+    // Save the room URL and creation timestamp to the session document
     await db.collection('sessions').doc(sessionId).update({
-      dailyRoomUrl: dailyRoomUrl
+      dailyRoomUrl: dailyRoomUrl,
+      dailyRoomCreatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
     console.log(`✅ Created and saved Daily room for session: ${dailyRoomUrl}`);
