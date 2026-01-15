@@ -7,6 +7,7 @@
     import { nanoid } from 'nanoid';
     import { FieldValue } from 'firebase-admin/firestore';
     import { sendGroupInviteNotification, sendMessageNotification } from '../services/notification.service';
+    import { moderateMessage } from '../services/moderation.service';
 
     export const createGroup = async (req: Request, res: Response) => {
     try {
@@ -100,6 +101,25 @@ export const sendGroupMessage = async (req: Request, res: Response) => {
     
     const validatedData = insertMessageSchema.parse(fullPayload);
 
+    // ===================================
+    // Moderation Check
+    // ===================================
+    // Check message content for negative words and apply moderation rules
+    // Note: Suspension check is already done by middleware, but we still
+    // need to check message content here for word violations.
+    const moderationResult = await moderateMessage(senderId, validatedData.content);
+
+    if (!moderationResult.isAllowed) {
+      // Message contains negative words or user is suspended
+      return res.status(403).json({
+        error: 'Message blocked by moderation system',
+        message: moderationResult.message,
+        action: moderationResult.action,
+        warningCount: moderationResult.warningCount,
+      });
+    }
+
+    // Message passed moderation, proceed with saving
     const messageData = {
       ...validatedData,
       createdAt: FieldValue.serverTimestamp(),

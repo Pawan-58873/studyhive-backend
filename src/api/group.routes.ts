@@ -2,6 +2,7 @@
 
 import { Router } from 'express';
 import { checkAuth } from '../middlewares/auth.middleware.js'; // Ensure .js for ESM compatibility
+import { checkSuspension } from '../middlewares/moderation.middleware.js'; // Moderation middleware
 import {
     createGroup,
     getMyGroups,
@@ -36,7 +37,8 @@ router.get('/:groupId/members', getGroupMembers);
 router.get('/:groupId/messages', getGroupMessages);
 
 // --- Route for sending a message ---
-router.post('/:groupId/messages', sendGroupMessage);
+// Apply moderation middleware: check suspension before allowing message
+router.post('/:groupId/messages', checkSuspension, sendGroupMessage);
 
 // --- Room access check for calls ---
 router.get('/:groupId/room-access', checkGroupRoomAccess);

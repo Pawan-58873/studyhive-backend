@@ -107,6 +107,24 @@ export const sendChatMessage = async (req: Request, res: Response) => {
         const senderProfile = userDoc.data() as User;
         const senderName = `${senderProfile.firstName || ''} ${senderProfile.lastName || ''}`.trim() || senderProfile.username;
 
+        // ===================================
+        // Moderation Check
+        // ===================================
+        // Check message content for negative words and apply moderation rules
+        const { moderateMessage } = await import('../services/moderation.service');
+        const moderationResult = await moderateMessage(senderId, content);
+
+        if (!moderationResult.isAllowed) {
+            // Message contains negative words or user is suspended
+            return res.status(403).json({
+                error: 'Message blocked by moderation system',
+                message: moderationResult.message,
+                action: moderationResult.action,
+                warningCount: moderationResult.warningCount,
+            });
+        }
+
+        // Message passed moderation, proceed with saving
         const messageData = {
             content,
             senderId,

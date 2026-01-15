@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { checkAuth } from '../middlewares/auth.middleware';
+import { checkSuspension } from '../middlewares/moderation.middleware';
 import { createOrGetChat, getChatMessages, sendChatMessage } from '../controllers/chat.controller';
 
 const router = Router();
@@ -10,6 +11,7 @@ router.post('/', createOrGetChat);
 
 // Routes for messages within a chat
 router.get('/:chatId/messages', getChatMessages);
-router.post('/:chatId/messages', sendChatMessage);
+// Apply moderation middleware: check suspension before allowing message
+router.post('/:chatId/messages', checkSuspension, sendChatMessage);
 
 export default router;

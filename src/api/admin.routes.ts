@@ -543,4 +543,52 @@ router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
     res.status(200).json({ success: true, message: 'Cache refreshed.' });
 });
 
+// ============ MODERATION LOGS API ============
+
+/**
+ * Get moderation logs for admin review
+ * Query params:
+ *   - userId: Filter by specific user ID (optional)
+ *   - limit: Number of logs to return (default: 50)
+ */
+router.get('/moderation-logs', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { getModerationLogs } = await import('../services/moderation.service');
+        const userId = req.query.userId as string | undefined;
+        const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
+
+        const logs = await getModerationLogs({
+            userId,
+            limit: Math.min(limit, 100), // Cap at 100 for performance
+        });
+
+        res.status(200).json(logs);
+    } catch (error: any) {
+        console.error('Error fetching moderation logs:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * Get moderation status for a specific user
+ */
+router.get('/moderation-status/:userId', async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { userId } = req.params;
+        const { getUserModerationStatus } = await import('../services/moderation.service');
+        
+        const status = await getUserModerationStatus(userId);
+        
+        res.status(200).json({
+            userId,
+            warningCount: status.warningCount,
+            isSuspended: status.isSuspended,
+            suspensionEnd: status.suspensionEndTimestamp?.toDate()?.toISOString() || null,
+        });
+    } catch (error: any) {
+        console.error('Error fetching moderation status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 export default router;
